@@ -1,0 +1,28 @@
+program: main.py # wandb agent catai/MIDL/xj9ppy0c
+project: MICCAI_concat_started_writing
+method: bayes 
+entity: catai
+metric:
+    name: Best Val F1
+    goal: maximize
+parameters:
+    k_start:
+      distribution: constant
+      value : 0
+    k_end:
+      distribution: constant
+      value : 1
+    lr:
+      values: [ 0.0001, 0.00005, 0.00001]
+    reg:
+      values: [0.005, .001,  0.0005]
+    hidden_layers:
+      values : [0, 1,2]
+    final_hidden_layers:
+      values : [0,1,2]
+    num_neurons:
+      values : [16, 32] 
+early_terminate:
+    type: hyperband
+    min_iter: 400
+

@@ -1,0 +1,25 @@
+program: main.py
+project: MICCAI ABU
+method: bayes 
+entity: catai
+metric:
+    name: Best Val F1
+    goal: maximize
+parameters:
+    lr:
+      values: [0.005, 0.001]
+    reg:
+      values: [0, 0.001, .0005, 0.0001, 0.00001,  0.000001]
+    dropout:
+      distribution: q_uniform
+      min: 0.0
+      max: 0.5
+      q:   0.1
+    hidden_layers:
+      values : [1,2,3]
+    opt:
+      values : ['sgd', 'adam']
+early_terminate:
+    type: hyperband
+    min_iter: 600
+
