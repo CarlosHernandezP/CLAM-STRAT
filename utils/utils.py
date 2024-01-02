@@ -33,7 +33,8 @@ class SubsetSequentialSampler(Sampler):
         return len(self.indices)
 
 def collate_MIL(batch):
-    img = torch.cat([item[0] for item in batch], dim = 0) #[Num_patches x Num features]
+    # I want to end up with [bs, num_patches, num_features]
+    img =  [item[0] for item in batch] # By doing this we have a list of tensors
     label = torch.LongTensor([item[1] for item in batch]) # [1]
     metadata = torch.FloatTensor([item[2].values for item in batch]) # [1 x Num metadata features]
     return [img, label, metadata]
@@ -55,7 +56,7 @@ def get_simple_loader(dataset, batch_size=1, num_workers=1):
     loader = DataLoader(dataset, batch_size=batch_size, sampler = sampler.SequentialSampler(dataset), collate_fn = collate_MIL_simple, **kwargs)
     return loader 
 
-def get_split_loader(split_dataset, training = False, testing = False, weighted = False):
+def get_split_loader(split_dataset, training = False, testing = False, weighted = False, bs = 1):
     """
         return either the validation loader or training loader 
     """
@@ -64,11 +65,11 @@ def get_split_loader(split_dataset, training = False, testing = False, weighted 
         if training:
             if weighted:
                 weights = make_weights_for_balanced_classes_split(split_dataset)
-                loader = DataLoader(split_dataset, batch_size=1, sampler = WeightedRandomSampler(weights, len(weights)), collate_fn = collate_MIL, **kwargs)	
+                loader = DataLoader(split_dataset, batch_size=bs, sampler = WeightedRandomSampler(weights, len(weights)), collate_fn = collate_MIL, **kwargs)	
             else:
-                loader = DataLoader(split_dataset, batch_size=1, sampler = RandomSampler(split_dataset), collate_fn = collate_MIL, **kwargs)
+                loader = DataLoader(split_dataset, batch_size=bs, sampler = RandomSampler(split_dataset), collate_fn = collate_MIL, **kwargs)
         else:
-            loader = DataLoader(split_dataset, batch_size=1, sampler = SequentialSampler(split_dataset), collate_fn = collate_MIL, **kwargs)
+            loader = DataLoader(split_dataset, batch_size=bs, sampler = SequentialSampler(split_dataset), collate_fn = collate_MIL, **kwargs)
 
     else:
         ids = np.random.choice(np.arange(len(split_dataset), int(len(split_dataset)*0.1)), replace = False)

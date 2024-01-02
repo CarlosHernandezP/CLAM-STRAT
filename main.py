@@ -9,8 +9,10 @@ import math
 # internal imports
 from utils.file_utils import save_pkl, load_pkl
 from utils.utils import *
+
 from utils.core_utils import train
-from datasets.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset
+from datasets.dataset_generic import (Generic_WSI_Classification_Dataset, Generic_MIL_Dataset,
+                        Clustering_MIL_Dataset)
 
 # pytorch imports
 import torch
@@ -67,7 +69,7 @@ def main(args):
 
 # Generic training settings
 parser = argparse.ArgumentParser(description='Configurations for WSI Training')
-parser.add_argument('--data_root_dir', type=str, default="feats_2023_level_2", 
+parser.add_argument('--data_root_dir', type=str, default="xxmm_feats_level_0", 
                     help='data directory')
 parser.add_argument('--max_epochs', type=int, default=650,
                     help='maximum number of epochs to train (default: 1800)')
@@ -82,7 +84,7 @@ parser.add_argument('--seed', type=int, default=1,
 parser.add_argument('--k', type=int, default=10, help='number of folds (default: 10)')
 parser.add_argument('--k_start', type=int, default=-1, help='start fold (default: -1, last fold)')
 parser.add_argument('--k_end', type=int, default=-1, help='end fold (default: -1, first fold)')
-parser.add_argument('--results_dir', default='./results/MICCAI/train_after_cat_sweep_v6', help='results directory (default: ./results)')
+parser.add_argument('--results_dir', default='./results/strat_pruebas', help='results directory (default: ./results)')
 parser.add_argument('--split_dir', type=str, default=None, 
                     help='manually specify the set of splits to use, ' 
                     +'instead of infering from the task and label_frac argument (default: None)')
@@ -93,12 +95,12 @@ parser.add_argument('--opt', type=str, choices = ['adam', 'sgd'], default='sgd')
 parser.add_argument('--drop_out', action='store_true', default=True, help='enabel dropout (p=0.25)')
 parser.add_argument('--bag_loss', type=str, choices=['svm', 'ce'], default='ce',
                      help='slide-level classification loss function (default: ce)')
-parser.add_argument('--model_type', type=str, choices=['clam_sb', 'clam_mb', 'mil'], default='clam_mb', 
+parser.add_argument('--model_type', type=str, choices=['clam_sb', 'clam_mb', 'mil'], default='clam_sb', 
                     help='type of model (default: clam_sb, clam w/ single attention branch)')
-parser.add_argument('--exp_code', type=str, default='MICCAI_upscaling_sweep', help='experiment code for saving results')
+parser.add_argument('--exp_code', type=str, default='Strat_pruebas', help='experiment code for saving results')
 parser.add_argument('--weighted_sample', action='store_true', default=True, help='enable weighted sampling')
 parser.add_argument('--model_size', type=str, choices=['small', 'big'], default='small', help='size of model, does not affect mil')
-parser.add_argument('--task', type=str, choices=['xxmm_2023', 'xxmm_slnb','task_1_tumor_vs_normal',  'task_2_tumor_subtyping'], default ='xxmm_2023')
+parser.add_argument('--task', type=str, choices=['strat', 'xxmm_2023', 'xxmm_slnb'], default ='strat')
 
 # The last two newly added brethrens
 parser.add_argument('--dropout', type=float,  default = 0.2)
@@ -162,43 +164,25 @@ if args.model_type in ['clam_sb', 'clam_mb']:
 
 print('\nLoad Dataset')
 
-if args.task == 'task_1_tumor_vs_normal':
-    args.n_classes=2
-    dataset = Generic_MIL_Dataset(csv_path = 'dataset_csv/tumor_vs_normal_dummy_clean.csv',
-                            data_dir= os.path.join(args.data_root_dir, 'tumor_vs_normal_resnet_features'),
-                            shuffle = False, 
-                            seed = args.seed, 
-                            print_info = True,
-                            label_dict = {'normal_tissue':0, 'tumor_tissue':1},
-                            patient_strat=False,
-                            ignore=[])
-
-elif args.task == 'task_2_tumor_subtyping':
-    args.n_classes=3
-    dataset = Generic_MIL_Dataset(csv_path = 'dataset_csv/tumor_subtyping_dummy_clean.csv',
-                            data_dir= os.path.join(args.data_root_dir, 'tumor_subtyping_resnet_features'),
-                            shuffle = False, 
-                            seed = args.seed, 
-                            print_info = True,
-                            label_dict = {'subtype_1':0, 'subtype_2':1, 'subtype_3':2},
-                            patient_strat= False,
-                            ignore=[])
-elif args.task == 'xxmm_slnb':
-    args.n_classes=2
-    dataset = Generic_MIL_Dataset(csv_path = '/home/carlos.hernandez/datasets/csvs/to_delete/xxmm_histopathology_metadata.csv',
-                            data_dir= os.path.join(args.data_root_dir, 'xxmm_features_noimputing'),
-                            shuffle = False, 
-                            seed = args.seed, 
-                            print_info = True,
-                            label_dict = {'negative':0, 'positive':1},
-                            patient_strat= False,
-                            ignore=[])
-
-elif args.task == 'xxmm_2023':
+if args.task == 'xxmm_2023':
     args.n_classes=2
     data_dir = '~/datasets/csvs/new_data_2023/histos_good_ids.csv'
 
     dataset = Generic_MIL_Dataset(csv_path = '/home/carlos.hernandez/datasets/csvs/new_data_2023/histos_good_ids.csv',
+                            data_dir  = args.data_root_dir,
+                            shuffle = False, 
+                            seed = args.seed, 
+                            print_info = True,
+                            label_dict = {0 :0, 1 :1},
+                            patient_strat= False,
+                            ignore=[])
+
+elif args.task == 'strat':
+    # Create a Survival MIL Dataset
+    args.n_classes=2
+    data_dir = '~/datasets/csvs/new_data_2023/histos_good_ids.csv'
+
+    dataset = Clustering_MIL_Dataset(csv_path = data_dir,
                             data_dir  = args.data_root_dir,
                             shuffle = False, 
                             seed = args.seed, 

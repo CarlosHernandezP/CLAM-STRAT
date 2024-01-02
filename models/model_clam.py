@@ -195,116 +195,6 @@ class CLAM_SB(nn.Module):
             results_dict.update({'features': M})
         return logits, Y_prob, Y_hat, A_raw, results_dict
 
-class multimodal_clam(nn.Module):
-    def __init__(self, clam, fus_method='max',
-                    dropout_value=0.2, hidden_layers=3, final_hidden_layers=2, num_neurons = 32):
-        super(multimodal_clam, self).__init__()
-
-        self.clam = clam
-        # Transformer magic that we will see if it works better
-       #self.transformer = nn.Transformer(d_model=2048, dim_feedforward=2048, num_encoder_layers=3,
-       #                        num_decoder_layers=3)
-        #self.MultiHeadAtt = nn.MultiheadAttention(embed_dim=2048, dropout=0.1,
-        #                    num_heads=8)
-        if fus_method=='cat':
-            if hidden_layers==0:
-                self.metadata_head = nn.Sequential(nn.Linear(3, num_neurons), nn.ReLU())
-            elif hidden_layers==1:
-                self.metadata_head = nn.Sequential(nn.Linear(3, num_neurons),
-                                               nn.ReLU(),  
-                                               nn.Linear(num_neurons, num_neurons), nn.ReLU())
-            elif hidden_layers==2:
-                self.metadata_head = nn.Sequential(nn.Linear(3, num_neurons), nn.ReLU(),  \
-                                               nn.Linear(num_neurons, num_neurons),
-                                               nn.ReLU(), 
-                                               nn.Linear(num_neurons, num_neurons), nn.ReLU())
-            elif hidden_layers==3:
-                self.metadata_head = nn.Sequential(nn.Linear(3, num_neurons), nn.ReLU(),  \
-                                                  nn.Linear(num_neurons, num_neurons),
-                                                  nn.ReLU(), 
-                                                  nn.Linear(num_neurons, num_neurons), nn.ReLU(),
-                                                  nn.Linear(num_neurons, num_neurons), nn.ReLU())
-            elif hidden_layers==4:
-                self.metadata_head = nn.Sequential(nn.Linear(3, num_neurons), nn.ReLU(),  \
-                                                  nn.Linear(num_neurons, num_neurons),
-                                                  nn.ReLU(), 
-                                                  nn.Linear(num_neurons, num_neurons), nn.ReLU(),
-                                                  nn.Linear(num_neurons, num_neurons), nn.ReLU(),
-                                                  nn.Linear(num_neurons, num_neurons), nn.ReLU())
-
-
-            num_feats = 128+num_neurons
-            print(f'Number of features are {num_feats}')
-            print(f'Number of neurons are {num_neurons}')
-        else:
-            num_feats=64
-            print('we should not be here')
-            self.metadata_head = nn.Sequential(
-                            nn.Linear(3, 32),
-                            nn.ReLU(),
-#                           nn.Dropout(p=dropout_value),
-#                           nn.Linear(32, 32),
-#                           nn.ReLU(),
-                            nn.Dropout(p=dropout_value),
-                            nn.Linear(32, 64),
-                            nn.ReLU())
-            
-        #self.instance_norm_patch = nn.InstanceNorm1d(
-        # ------------- Data fusion & Classification --------------------- 
-        self.n_classes = 2
-        if 'SB' in str(type(clam)):
-            self.clam_type = 'sb'
-            self.classifiers = nn.Linear(num_feats, self.n_classes)
-        else:
-            self.clam_type = 'mb'
-            classifier_neurons = 32
-            if final_hidden_layers == 0:
-                self.fc_layers = nn.Sequential(nn.Identity())
-                classifier_neurons = num_feats
-            elif final_hidden_layers==1:
-                self.fc_layers = nn.Sequential(nn.Linear(num_feats, 32), nn.ReLU())
-                classifier_neurons=  32
-            elif final_hidden_layers==2:
-                self.fc_layers = nn.Sequential(nn.Linear(num_feats, 32), nn.ReLU(),
-                                               nn.Linear(32, 32), nn.ReLU())
-                classifier_neurons=32
-        bag_classifiers = [nn.Sequential(nn.Linear(classifier_neurons, 1)) for i in range(self.n_classes)]#,  \
-        self.classifiers = nn.ModuleList(bag_classifiers)
-
-
-        self.fus_method = fus_method
-        self.fusion = Fusion(method = fus_method, clam_type=self.clam_type)
-        self.device = 'cpu' if not torch.cuda.is_available() else 'cuda'
-        self.instance_norm_patches = nn.InstanceNorm1d(64)
-        self.instance_norm_meta = nn.InstanceNorm1d(num_neurons)
-
-    def forward(self, h, label=None, instance_eval=False, return_features=False,
-                                                    attention_only=False, metadata=None):
-        M, total_inst_loss, all_targets, all_preds, A_raw= self.clam(h, label, instance_eval)
-        M = self.instance_norm_patches(M.unsqueeze(dim=0)).squeeze(dim=0)
-        
-        metadata = self.instance_norm_meta(self.metadata_head(metadata).unsqueeze(dim=0)).squeeze(dim=0)
-       # metadata = F.normalize(metadata)
-        M = self.fusion(M, metadata)
-        combination = self.fc_layers(M)
-        
-        logits = torch.empty(1, self.n_classes).float().to(self.device)
-        if self.clam_type=='mb':
-            for c in range(self.n_classes):
-                logits[0, c] = self.classifiers[c](combination[c])
-        else:
-            logits = self.classifiers(M)
-
-        # -------------- Obtain prediction ---------------------------------
-        Y_hat = torch.topk(logits, 1, dim = 1)[1]
-        Y_prob = F.softmax(logits, dim = 1)
-        if instance_eval:
-            results_dict = {'instance_loss': total_inst_loss, 'inst_labels': np.array(all_targets), 
-            'inst_preds': np.array(all_preds)}
-        else:
-            results_dict = {}
-        return logits, Y_prob, Y_hat, A_raw, results_dict
-
 class CLAM_MB_multimodal(CLAM_SB):
     def __init__(self, gate = True, size_arg = "small",
                  dropout = False, k_sample=8, n_classes=2, dropout_value=0.2,
@@ -312,9 +202,8 @@ class CLAM_MB_multimodal(CLAM_SB):
 
         nn.Module.__init__(self)
         if feat_type=='simclr':
-            self.size_dict = {"small": [2048, 128, 128], "big": [1024, 512, 384]}
-        else:
-            self.size_dict = {"small": [1024, 64, 64], "big": [1024, 512, 384]}
+            self.size_dict = {"small": [384, 128, 128], "big": [1024, 512, 384]}
+
         size = self.size_dict[size_arg]
         fc = [nn.Linear(size[0], size[1]), nn.ReLU()]
         if dropout:
@@ -323,6 +212,7 @@ class CLAM_MB_multimodal(CLAM_SB):
             attention_net = Attn_Net_Gated(L = size[1], D = size[2], dropout = dropout, n_classes = n_classes)
         else:
             attention_net = Attn_Net(L = size[1], D = size[2], dropout = dropout, n_classes = n_classes)
+
         fc.append(attention_net)
         self.attention_net = nn.Sequential(*fc)
         instance_classifiers = [nn.Linear(size[1], 2) for i in range(n_classes)]
@@ -380,11 +270,9 @@ class CLAM_SB_multimodal(CLAM_SB):
         instance_loss_fn=nn.CrossEntropyLoss(), subtyping=False, feat_type='simclr'):
 
         nn.Module.__init__(self)
-        if feat_type=='simclr':
-            self.size_dict = {"small": [2048, 64, 64], "big": [1024, 512, 384]}
-        else:
-            self.size_dict = {"small": [1024, 64, 64], "big": [1024, 512, 384]}
+        self.size_dict = {"small": [384, 256, 128], "big": [1024, 512, 384]}
         size = self.size_dict[size_arg]
+
         fc = [nn.Linear(size[0], size[1]), nn.ReLU()]
         if dropout:
             fc.append(nn.Dropout(dropout_value))
@@ -394,8 +282,10 @@ class CLAM_SB_multimodal(CLAM_SB):
             attention_net = Attn_Net(L = size[1], D = size[2], dropout = dropout, n_classes = 1)
         fc.append(attention_net)
         self.attention_net = nn.Sequential(*fc)
+
         instance_classifiers = [nn.Linear(size[1], 2) for i in range(n_classes)]
         self.instance_classifiers = nn.ModuleList(instance_classifiers)
+
         self.k_sample = k_sample
         self.instance_loss_fn = instance_loss_fn
         self.n_classes = n_classes
@@ -405,7 +295,6 @@ class CLAM_SB_multimodal(CLAM_SB):
 
     def forward(self, h, label=None, instance_eval=False, return_features=False, attention_only=False):
         device = h.device
-
         A, h = self.attention_net(h)  # NxK        
         A = torch.transpose(A, 1, 0)  # KxN
         if attention_only:
@@ -413,35 +302,36 @@ class CLAM_SB_multimodal(CLAM_SB):
         A_raw = A
         A = F.softmax(A, dim=1)  # softmax over N
         
-        if instance_eval:
-            total_inst_loss = 0.0
-            all_preds = []
-            all_targets = []
-            inst_labels = F.one_hot(label, num_classes=self.n_classes).squeeze() #binarize label
-            for i in range(len(self.instance_classifiers)):
-                inst_label = inst_labels[i].item()
-                classifier = self.instance_classifiers[i]
-                if inst_label == 1: #in-the-class:
-                    instance_loss, preds, targets = self.inst_eval(A, h, classifier)
-                    all_preds.extend(preds.cpu().numpy())
-                    all_targets.extend(targets.cpu().numpy())
-                else: #out-of-the-class
-                    if self.subtyping:
-                        instance_loss, preds, targets = self.inst_eval_out(A, h, classifier)
-                        all_preds.extend(preds.cpu().numpy())
-                        all_targets.extend(targets.cpu().numpy())
-                    else:
-                        continue
-                total_inst_loss += instance_loss
+       #if instance_eval:
+       #    total_inst_loss = 0.0
+       #    all_preds = []
+       #    all_targets = []
+       #    inst_labels = F.one_hot(label, num_classes=self.n_classes).squeeze() #binarize label
+       #    for i in range(len(self.instance_classifiers)):
+       #        inst_label = inst_labels[i].item()
+       #        classifier = self.instance_classifiers[i]
+       #        if inst_label == 1: #in-the-class:
+       #            instance_loss, preds, targets = self.inst_eval(A, h, classifier)
+       #            all_preds.extend(preds.cpu().numpy())
+       #            all_targets.extend(targets.cpu().numpy())
+       #        else: #out-of-the-class
+       #            if self.subtyping:
+       #                instance_loss, preds, targets = self.inst_eval_out(A, h, classifier)
+       #                all_preds.extend(preds.cpu().numpy())
+       #                all_targets.extend(targets.cpu().numpy())
+       #            else:
+       #                continue
+       #        total_inst_loss += instance_loss
 
-            if self.subtyping:
-                total_inst_loss /= len(self.instance_classifiers)
-        else:
-            total_inst_loss = 0.0
-            all_targets = []
-            all_preds = []
+       #    if self.subtyping:
+       #        total_inst_loss /= len(self.instance_classifiers)
+       #else:
+       #    total_inst_loss = 0.0
+       #    all_targets = []
+       #    all_preds = []
                 
         M = torch.mm(A, h) 
+        total_inst_loss, all_targets, all_preds = 0, [], []
         return M, total_inst_loss, all_targets, all_preds, A_raw
 
 class CLAM_MB(CLAM_SB):
