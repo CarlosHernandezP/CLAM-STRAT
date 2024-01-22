@@ -31,16 +31,16 @@ class Attn_Net(nn.Module):
 
         return self.module(x), x # N x n_classes
 
-"""
-Attention Network with Sigmoid Gating (3 fc layers)
-args:
-    L: input feature dimension
-    D: hidden layer dimension
-    dropout: whether to use dropout (p = 0.25)
-    n_classes: number of classes 
-"""
 class Attn_Net_Gated(nn.Module):
     def __init__(self, L = 2048, D = 256, dropout = False, n_classes = 1):
+        """
+        Attention Network with Sigmoid Gating (3 fc layers)
+        args:
+            L: input feature dimension
+            D: hidden layer dimension
+            dropout: whether to use dropout (p = 0.25)
+            n_classes: number of classes 
+        """
         super(Attn_Net_Gated, self).__init__()
         self.attention_a = [
             nn.Linear(L, D),

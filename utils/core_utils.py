@@ -13,7 +13,7 @@ from sklearn.metrics import auc as calc_auc
 from tqdm import tqdm
 
 from utils.utils import *
-from utils.losses import compute_losses
+from utils.losses import compute_losses, compute_clustered_nll
 from datasets.dataset_generic import save_splits
 
 from models.model_mil import MIL_fc, MIL_fc_mc
@@ -21,41 +21,8 @@ from models.strat_models import multimodal_cluster
 from models.model_clam import (CLAM_MB, CLAM_SB,
                     CLAM_MB_multimodal, CLAM_SB_multimodal, only_metadata_clam)
 
-
-class Accuracy_Logger(object):
-    """Accuracy logger"""
-    def __init__(self, n_classes):
-        super(Accuracy_Logger, self).__init__()
-        self.n_classes = n_classes
-        self.initialize()
-
-    def initialize(self):
-        self.data = [{"count": 0, "correct": 0} for i in range(self.n_classes)]
-    
-    def log(self, Y_hat, Y):
-        Y_hat = int(Y_hat)
-        Y = int(Y)
-        self.data[Y]["count"] += 1
-        self.data[Y]["correct"] += (Y_hat == Y)
-    
-    def log_batch(self, Y_hat, Y):
-        Y_hat = np.array(Y_hat).astype(int)
-        Y = np.array(Y).astype(int)
-        for label_class in np.unique(Y):
-            cls_mask = Y == label_class
-            self.data[label_class]["count"] += cls_mask.sum()
-            self.data[label_class]["correct"] += (Y_hat[cls_mask] == Y[cls_mask]).sum()
-    
-    def get_summary(self, c):
-        count = self.data[c]["count"] 
-        correct = self.data[c]["correct"]
-        
-        if count == 0: 
-            acc = None
-        else:
-            acc = float(correct) / count
-        
-        return acc, correct, count
+from utils.metrics_strat import fit_nelson_aalen_clusters
+from typing import Dict, Union
 
 class EarlyStopping:
     """Early stops the training if validation loss doesn't improve after a given patience."""
@@ -100,21 +67,44 @@ class EarlyStopping:
         torch.save(model.state_dict(), ckpt_name)
         self.val_loss_min = val_loss
 
+
+def wandb_update(
+    c_index_results: Dict[str, float],
+    test_c_index: float,
+    test_loss: Dict[str, float],
+    train_losses: Dict[str, float],
+    val_losses: Dict[str, float],
+    test_update: bool = False
+) -> None:
+    log_data: Dict[str, Union[float, Dict[str, float]]] = {
+        'Val C index': c_index_results['c_index_val'],
+        'Train C index': c_index_results['c_index_train'],
+        'Train total loss': train_losses['total_loss'],
+        'Train k_means loss': train_losses['k_means_loss'],
+        'Train silhouette loss': train_losses['silhouette_loss'],
+        'Val total loss': val_losses['total_loss'],
+        'Val k_means loss': val_losses['k_means_loss'],
+        'Val silhouette loss': val_losses['silhouette_loss']
+    }
+
+    if test_update:
+        log_data.update({
+            'Test total loss': test_loss['total_loss'],
+            'Test k_means_loss': test_loss['k_means_loss'],
+            'Test silhouette loss': test_loss['silhouette_loss'],
+            'Test C index': test_c_index
+        })
+
+    wandb.log(log_data)
+
+
 def train(datasets, cur, args):
     """   
         train for a single fold
     """
     print('\nTraining Fold {}!'.format(cur))
     writer_dir = os.path.join(args.results_dir, str(cur))
-    if not os.path.isdir(writer_dir):
-        os.mkdir(writer_dir)
 
-    if args.log_data:
-        from tensorboardX import SummaryWriter
-        writer = SummaryWriter(writer_dir, flush_secs=15)
-
-    else:
-        writer = None
     print('\nInit train/val/test splits...', end=' ')
     train_split, val_split, test_split = datasets
     save_splits(datasets, ['train', 'val', 'test'], os.path.join(args.results_dir, 'splits_{}.csv'.format(cur)))
@@ -173,7 +163,7 @@ def train(datasets, cur, args):
     model = multimodal_cluster(model, hidden_layers= args.hidden_layers,
                             fus_method=args.fusion, dropout_value=args.dropout,
                             num_neurons=args.num_neurons,
-                            final_hidden_layers=args.final_hidden_layers) 
+                            final_hidden_layers=args.final_hidden_layers, temperature=0.2) 
     ## If we want only metadata
     #model = only_metadata_clam(model, hidden_layers=args.hidden_layers, dropout_value=args.dropout)
     print('Done!')
@@ -187,9 +177,9 @@ def train(datasets, cur, args):
     
     print('\nInit Loaders...', end=' ')
     train_loader = get_split_loader(train_split, training=True, testing = args.testing,
-                                        bs=5, weighted = args.weighted_sample)
-    val_loader = get_split_loader(val_split,  testing = args.testing, bs=5)
-    test_loader = get_split_loader(test_split, testing = args.testing, bs=5)
+                                        bs=40, weighted = args.weighted_sample)
+    val_loader = get_split_loader(val_split,  testing = args.testing, bs=40)
+    test_loader = get_split_loader(test_split, testing = args.testing, bs=40)
     print('Done!')
     print('\nSetup EarlyStopping...', end=' ')
     if args.early_stopping:
@@ -200,61 +190,40 @@ def train(datasets, cur, args):
         early_stopping = None
     print('Done!')
      
-    max_auc =-1.0
+    max_c_index =-1.0
 
    #wandb.init(project=f'SLNB positivity {feat_type} 2023', entity='catai', reinit=True, config=args)
+    wandb.init(project=f'Pruebas Clustering', entity='catai', reinit=True, config=args)
     model.to('cuda')
-    print(args.max_epochs)
     for epoch in range(args.max_epochs):
-        if args.model_type in ['clam_sb', 'clam_mb'] and not args.no_inst_cluster:     
-            train_loop_clam(epoch, model, train_loader, optimizer, args.n_classes, args.bag_weight, writer, loss_fn)
-           #stop, metrics, losses = validate_clam(cur, epoch, model, val_loader, args.n_classes, 
-           #    early_stopping, writer, loss_fn, args.results_dir)
-        else:
-            train_loop(epoch, model, train_loader, optimizer, args.n_classes, writer, loss_fn)
-            stop, metrics, losses = validate(cur, epoch, model, val_loader, args.n_classes,  early_stopping, writer, loss_fn, args.results_dir)
-        continue
-        ### CHANGE
-        ### metrics[0] has the f1-score of the last val epoch
-        if max_auc<=metrics[0]:
-            max_auc = metrics[0]
+        training_predictions, train_losses= train_loop_clam(epoch, model, train_loader, optimizer, args.n_classes, args.bag_weight,  loss_fn)
+        c_index_results, val_predictions, val_losses = validate_clam(cur, epoch,
+                        model, val_loader, args.n_classes, training_predictions,  
+                        early_stopping,  loss_fn, args.results_dir)
+
+        #continue
+
+        if max_c_index<=c_index_results['c_index_val']:
+            max_c_index = c_index_results['c_index_val']
             #torch.save(model.state_dict(), os.path.join(args.results_dir, "{}/s_{}_{}_checkpoint.pt".format(cur, round(metrics[0],3), cur)))
-            wandb.log({"P-R curve" : wandb.plot.pr_curve(metrics[1], metrics[2], labels=['Negative', 'Positive'])})
 
-            results_dict, test_error, test_auc, acc_logger, metrics_test = summary(model, test_loader, args.n_classes)
+            test_loss, _, _, _, test_c_index = summary(model, test_loader, args.n_classes, training_predictions)
             
-            wandb.log({"P-R curve test" : wandb.plot.pr_curve(metrics_test[1], metrics_test[2], labels=['Negative', 'Positive'])})
 
-            # Log Val and Test at the same step!! 
-            wandb.log({
-                   'Val loss' : losses[0], 'Val F1' : metrics[0],
-                   'Val error' : losses[1], 'Val inst loss' : losses[2],
-                   'Val bal acc' : metrics[3], 'Val sensitivity': metrics[4],
-                    'Val specificity': metrics[5], 'Val auc' : metrics[6],
-                   'Val precision' : metrics[7],
-                    'Test f1' : metrics_test[0],
-                    'Test bal acc' : metrics_test[3],
-                    'Test sensitivity': metrics_test[4],
-                    'Test specificity': metrics_test[5],
-                    'Test auc' : metrics_test[6],
-                    'Test precision' : metrics_test[7],
-                    'Best Val F1': max_auc}) # Shitty name as it is the ValF1 but we'll just leave it as it is for now
+            wandb_update(c_index_results, test_c_index, test_loss, train_losses, val_losses, test_update = True)
         else:
             # Log separately if needed
-            wandb.log({
-                   'Val loss' : losses[0], 'Val F1' : metrics[0],
-                   'Val error' : losses[1], 'Val inst loss' : losses[2],
-                   'Val bal acc' : metrics[3], 'Val sensitivity': metrics[4],
-                   'Val specificity': metrics[5], 'Val auc' : metrics[6],
-                   'Val precision' : metrics[7]})
-        if stop: 
-            break
-        scheduler.step()
+            # I want to pot c index and the losses for train and validation
+            wandb_update(c_index_results, test_c_index=None, test_loss=None,
+                           train_losses=train_losses, val_losses=val_losses)
+       #if stop: 
+       #    break
+    scheduler.step()
         
-    if args.early_stopping:
-        model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))))
-    else:
-        torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
+   #if args.early_stopping:
+   #    model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))))
+   #else:
+   #    torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
 
    #_, val_error, val_auc, _, _= summary(model, val_loader, args.n_classes)
    #print('Val error: {:.4f}, ROC AUC: {:.4f}'.format(val_error, val_auc))
@@ -280,19 +249,26 @@ def train(datasets, cur, args):
     return 0,0,0,0,0#results_dict, test_auc, val_auc, 1-test_error, 1-val_error 
 
 
-def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writer = None, loss_fn = None):
+def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, loss_fn = None):
     device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.train()
-    acc_logger = Accuracy_Logger(n_classes=n_classes)
-    inst_logger = Accuracy_Logger(n_classes=n_classes)
-    
+   
+    # Initialize lists to store data for Nelson-Aalen estimator
+    train_cluster_assignments = []
+    train_survival_times = []    # Replace with actual survival t<Escape>imes data
+    train_event_indicators = []  # Replace with actual event indicators data
+
     train_loss = 0.
     train_error = 0.
-    train_inst_loss = 0.
-    inst_count = 0
+    total_kmeans_loss = 0.
+    total_silhouette_loss = 0.
+
+   #train_inst_loss = 0.
+   #inst_count = 0
 
     print('\n')
-    for batch_idx, (data, label, metadata) in tqdm(enumerate(loader)):
+    total_batches = len(loader)  # Get the total number of batches
+    for batch_idx, (data, label, metadata) in enumerate(tqdm(loader, desc='Training')):
         label, metadata = label.to(device), metadata.to(device)
 
         distances, assignments, Y_hat, aggregated_features, instance_dict = model(data, label=label, instance_eval=True, metadata=metadata)
@@ -302,11 +278,35 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
 
         centroids = model.clustering_layer.centroids
         
+        nll_loss = compute_clustered_nll(assignments, label)
         total_loss, loss_k_means, loss_silhouette = compute_losses(aggregated_features, centroids,
-                                    assignments, k_means_loss_weight=1, silhouette_loss_weight=100)
+                                    assignments, k_means_loss_weight=1, silhouette_loss_weight=1)
+
+        total_loss += nll_loss
+        # Add cluster assignments to the list (assuming 'assignments' contains the cluster assignments)
+        train_cluster_assignments.extend(torch.argmax(assignments, dim=1).detach().cpu().numpy())
+        
+        # Extract survival times and event indicators from label
+        event_indicators = label[:, 0].detach().cpu().numpy()  # First column for event indicators
+        survival_times = label[:, 1].detach().cpu().numpy()  # Second column for survival times
+        train_survival_times.extend(survival_times)
+        train_event_indicators.extend(event_indicators)
+
+        # train_event_indicators.extend(extracted_event_indicators)import ipdb; ipdb.set_trace()
 
         loss_value = total_loss.item()
 
+        # backward pass
+        total_loss.backward()
+        # step
+        optimizer.step()
+        optimizer.zero_grad()
+
+        train_loss += loss_value
+        total_kmeans_loss += loss_k_means.item()
+        total_silhouette_loss += loss_silhouette.item()
+
+        # Unused for now as we are not using instance loss
       # instance_loss = instance_dict['instance_loss']
       # inst_count+=1
       # instance_loss_value = instance_loss.item()
@@ -318,7 +318,6 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
       # inst_labels = instance_dict['inst_labels']
       # inst_logger.log_batch(inst_preds, inst_labels)
 
-        train_loss += loss_value
      #  if (batch_idx + 1) % 20 == 0:
      #      print('batch {}, loss: {:.4f}, instance_loss: {:.4f}, weighted_loss: {:.4f}, '.format(batch_idx, loss_value, instance_loss_value, total_loss.item()) + 
      #          'label: {}, bag_size: {}'.format(label.item(), data.size(0)))
@@ -326,17 +325,35 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
         #error = calculate_error(Y_hat, label)
       # train_error += error
         
-        # backward pass
-        total_loss.backward()
-        # step
-        optimizer.step()
-        optimizer.zero_grad()
 
     # calculate loss and error for epoch
     train_loss /= len(loader)
     train_error /= len(loader)
+    total_kmeans_loss /= len(loader)
+    total_silhouette_loss /= len(loader)
+
     # Print kmeans, silhouette and total loss without any inst loss
-    print(f'Epoch: {epoch}: train_loss: {train_loss:.4f}, loss_k_means: {loss_k_means:.4f}, loss_silhouette: {loss_silhouette:.4f}')
+    print(f'Training Epoch: {epoch}: train_loss: {train_loss:.4f}, loss_k_means: {total_kmeans_loss:.4f}, loss_silhouette: {total_silhouette_loss:.4f}')
+
+
+
+    # After training loop, prepare the data for Nelson-Aalen estimator
+    train_data = {
+        'clusters': np.array(train_cluster_assignments),
+        'times': np.array(train_survival_times),
+        'events': np.array(train_event_indicators)
+    }
+
+    losses_dict = {
+        'total_loss': train_loss,
+        'k_means_loss': total_kmeans_loss,
+        'silhouette_loss': total_silhouette_loss,
+        # Add other individual losses here
+    }
+
+# Return the updated values
+    return train_data, losses_dict
+
   # if inst_count > 0:
   #     train_inst_loss /= inst_count
   #     print('\n')
@@ -361,120 +378,106 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
   #     }, commit=False)
 
 
-def validate_clam(cur, epoch, model, loader, n_classes, early_stopping = None, writer = None, loss_fn = None, results_dir = None):
+def validate_clam(cur, epoch, model, loader, n_classes, training_predictions,  early_stopping = None, loss_fn = None, results_dir = None):
     device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.eval()
-    acc_logger = Accuracy_Logger(n_classes=n_classes)
-    inst_logger = Accuracy_Logger(n_classes=n_classes)
+
     val_loss = 0.
-    val_error = 0.
 
-    val_inst_loss = 0.
-    val_inst_acc = 0.
-    inst_count=0
-    
-    prob = np.zeros((len(loader), n_classes))
-    labels = np.zeros(len(loader))
+    # Initialize lists to store data for Nelson-Aalen estimator
+    val_cluster_assignments = []
+    val_survival_times = []    # To store survival times
+    val_event_indicators = []  # To store event indicators
+
+#   val_inst_loss = 0. # Depracated
+    total_kmeans_loss = 0.
+    total_silhouette_loss = 0.
+
     ### CHANGE
-    Y_hats = np.zeros(len(loader))
     with torch.no_grad():
-        for batch_idx, (data, label, metadata) in enumerate(loader):
-            data, label, metadata = data.to(device), label.to(device), metadata.to(device)
-            distances, Y_prob, Y_hat, _, instance_dict = model(data, label=label, instance_eval=True, metadata=metadata)
+        for batch_idx, (data, label, metadata) in enumerate(tqdm(loader, desc='Validation')):
+            label, metadata = label.to(device), metadata.to(device)
 
-            acc_logger.log(Y_hat, label)
-            loss = loss_fn(distances, label)
+            distances, assignments, Y_hat, aggregated_features, instance_dict = model(data, label=label, instance_eval=True, metadata=metadata)
 
-            val_loss += loss.item()
+#           acc_logger.log(Y_hat, label)
 
-            instance_loss = instance_dict['instance_loss']
-            
-            inst_count+=1
-            instance_loss_value = instance_loss.item()
-            val_inst_loss += instance_loss_value
+            # Obtain centroids and compute losses
+            centroids = model.clustering_layer.centroids
+            total_loss, loss_k_means, loss_silhouette = compute_losses(aggregated_features, centroids,
+                                        assignments, k_means_loss_weight=1, silhouette_loss_weight=1)
 
-            inst_preds = instance_dict['inst_preds']
-            inst_labels = instance_dict['inst_labels']
-            inst_logger.log_batch(inst_preds, inst_labels)
+            loss_value = total_loss.item()
 
-            prob[batch_idx] = Y_prob.cpu().numpy()
-            labels[batch_idx] = label.item()
-            Y_hats[batch_idx] = Y_hat.cpu().item()
+            val_loss += loss_value
+            total_kmeans_loss += loss_k_means.item()
+            total_silhouette_loss += loss_silhouette.item()
 
-            #error = calculate_error(Y_hat, label)
-            val_error += error
+            # Add cluster assignments to the list
+            val_cluster_assignments.extend(torch.argmax(assignments, dim=1).detach().cpu().numpy())
 
-    val_error /= len(loader)
+            # Extract survival times and event indicators from label
+            survival_times = label[:, 1].detach().cpu().numpy()  # Second column for survival times
+            event_indicators = label[:, 0].detach().cpu().numpy()  # First column for event indicators
+
+            val_survival_times.extend(survival_times)
+            val_event_indicators.extend(event_indicators)
+
     val_loss /= len(loader)
+    total_kmeans_loss /= len(loader)
+    total_silhouette_loss /= len(loader)
 
-    if n_classes == 2:
-        ### CHANGE
-        ### We are giving these back to compute for the best model
-        auc = roc_auc_score(labels, prob[:, 1])
-        f1_value = f1_score(labels, Y_hats)
-        bal_acc = balanced_accuracy_score(labels, Y_hats)
-        sensitivity = recall_score(labels, Y_hats)
-        cm = confusion_matrix(labels, Y_hats)
-        specificity = cm[0][0]/(cm[0][0]+cm[0][1]) # TN/(TN+FP)
-        precision   = precision_score(labels, Y_hats)
-        metrics = (f1_value, labels, prob, bal_acc, sensitivity, specificity, auc, precision)
-        aucs = []
-    else:
-        aucs = []
-        binary_labels = label_binarize(labels, classes=[i for i in range(n_classes)])
-        for class_idx in range(n_classes):
-            if class_idx in labels:
-                fpr, tpr, _ = roc_curve(binary_labels[:, class_idx], prob[:, class_idx])
-                aucs.append(calc_auc(fpr, tpr))
-            else:
-                aucs.append(float('nan'))
-
-        auc = np.nanmean(np.array(aucs))
-
-    print('\nVal Set, val_loss: {:.4f}, val_error: {:.4f}, f1: {:.4f}'.format(val_loss, val_error, f1_value))
-    if inst_count > 0:
-        val_inst_loss /= inst_count
-        for i in range(2):
-            acc, correct, count = inst_logger.get_summary(i)
-            print('class {} clustering acc {}: correct {}/{}'.format(i, acc, correct, count))
     
-    if writer:
-        writer.add_scalar('val/loss', val_loss, epoch)
-        writer.add_scalar('val/auc', auc, epoch)
-        writer.add_scalar('val/error', val_error, epoch)
-        writer.add_scalar('val/inst_loss', val_inst_loss, epoch)
 
+    # Prepare the data for Nelson-Aalen estimator
+    val_data = {
+        'clusters': np.array(val_cluster_assignments),
+        'times': np.array(val_survival_times),
+        'events': np.array(val_event_indicators)
+    }
 
-    for i in range(n_classes):
-        acc, correct, count = acc_logger.get_summary(i)
-        print('class {}: acc {}, correct {}/{}'.format(i, acc, correct, count))
-        
-        if writer and acc is not None:
-            writer.add_scalar('val/class_{}_acc'.format(i), acc, epoch)
-    
+    losses_dict = {
+        'total_loss': val_loss,
+        'k_means_loss': total_kmeans_loss,
+        'silhouette_loss': total_silhouette_loss,
+    }
+
+    # Compute the c-index and inverse Brier score
+    # Note: Make sure the fit_nelson_aalen_clusters function is defined or imported
+    c_index_results = fit_nelson_aalen_clusters(training_predictions, val_data)  # Using training_predictions here
+           # The return looks like this, I wanna print it: return {'c_index_train': c_index_train, 'c_index_val': c_index_val}
+    print(f'Validation Epoch: {epoch}: val_loss: {val_loss:.4f}, loss_k_means: {total_kmeans_loss:.4f}, loss_silhouette: {total_silhouette_loss:.4f}')
+    print('#'*50)
+    print(f'Metrics for training and validation:\n Train {c_index_results["c_index_train"]:.4f}, Validation {c_index_results["c_index_val"]:.4f}')
 
     if early_stopping:
         assert results_dir
         early_stopping(epoch, val_loss, model, ckpt_name = os.path.join(results_dir, "s_{}_checkpoint.pt".format(cur)))
         
-        if early_stopping.early_stop:
-            ### CHANGE
-            ### we are returning the metrics to save the model
-            ### and compute the PR curve
-            print("Early stopping")
-            return True, metrics, [val_loss, val_error, val_inst_loss]
-    
-    ### CHANGE
-    ### we are returning the metrics to save the model
-    ### and compute the PR curve
-    return False, metrics, [val_loss, val_error, val_inst_loss]
+       #if early_stopping.early_stop:
+       #    ### CHANGE
+       #    ### we are returning the metrics to save the model
+       #    ### and compute the PR curve
+       #    print("Early stopping")
+       #    return True, metrics, [val_loss, val_error, val_inst_loss]
 
-def summary(model, loader, n_classes):
+    return c_index_results, val_data, losses_dict
+
+
+
+
+
+def summary(model, loader, n_classes, training_predictions):
     device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    acc_logger = Accuracy_Logger(n_classes=n_classes)
     model.eval()
+
     test_loss = 0.
-    test_error = 0.
+    total_kmeans_loss = 0.
+    total_silhouette_loss = 0.
+
+    cluster_assignments = []
+    loader_survival_times = []    # To store survival times
+    loader_event_indicators = []  # To store event indicators
 
     all_probs = np.zeros((len(loader), n_classes))
     all_labels = np.zeros(len(loader))
@@ -485,180 +488,59 @@ def summary(model, loader, n_classes):
     ### CHANGE
     ### We are adding this in order to compute other metrics later
     prob = np.zeros((len(loader), n_classes))
+
+
     labels = np.zeros(len(loader))
     Y_hats = np.zeros(len(loader))
-    for batch_idx, (data, label, metadata) in enumerate(loader):
-        data, label, metadata = data.to(device), label.to(device), metadata.to(device)
+    for batch_idx, (data, label, metadata) in enumerate(tqdm(loader, desc='Test')):
+        label, metadata = label.to(device), metadata.to(device)
+
         slide_id = slide_ids.iloc[batch_idx]
         with torch.no_grad():
-            distances, Y_prob, Y_hat, _, _ = model(data, metadata=metadata)
+            distances, assignments, Y_hat, aggregated_features, instance_dict = model(data, metadata=metadata)
 
-        acc_logger.log(Y_hat, label)
-        probs = Y_prob.cpu().numpy()
-        all_probs[batch_idx] = probs
-        all_labels[batch_idx] = label.item()
+        probs = Y_hat.cpu().numpy()
+        #import ipdb; ipdb.set_trace()
 
-        ### CHANGE
-        prob[batch_idx] = Y_prob.cpu().numpy()
-        labels[batch_idx] = label.item()
-        Y_hats[batch_idx] = Y_hat.cpu().item()
+        # Obtain centroids and compute losses
+        centroids = model.clustering_layer.centroids
+        total_loss, loss_k_means, loss_silhouette = compute_losses(aggregated_features, centroids,
+                                    assignments, k_means_loss_weight=1, silhouette_loss_weight=1)
 
-        
-        patient_results.update({slide_id: {'slide_id': np.array(slide_id), 'prob': probs, 'label': label.item()}})
-        #error = calculate_error(Y_hat, label)
-        test_error += error
+        loss_value = total_loss.item()
 
-    test_error /= len(loader)
+        test_loss += loss_value
+        total_kmeans_loss += loss_k_means.item()
+        total_silhouette_loss += loss_silhouette.item()
 
-    if n_classes == 2:
-        auc = roc_auc_score(all_labels, all_probs[:, 1])
-
-        f1_value = f1_score(labels, Y_hats)
-        bal_acc = balanced_accuracy_score(labels, Y_hats)
-        sensitivity = recall_score(labels, Y_hats)
-        cm = confusion_matrix(labels, Y_hats)
-        specificity = cm[0][0]/(cm[0][0]+cm[0][1]) #TN/(TN+FP)
-        precision   = precision_score(labels, Y_hats)
-        metrics = (f1_value, labels, prob, bal_acc, sensitivity, specificity, auc, precision)
-        aucs = []
-    else:
-        aucs = []
-        binary_labels = label_binarize(all_labels, classes=[i for i in range(n_classes)])
-        for class_idx in range(n_classes):
-            if class_idx in all_labels:
-                fpr, tpr, _ = roc_curve(binary_labels[:, class_idx], all_probs[:, class_idx])
-                aucs.append(calc_auc(fpr, tpr))
-            else:
-                aucs.append(float('nan'))
-
-        auc = np.nanmean(np.array(aucs))
-
-
-    return patient_results, test_error, auc, acc_logger, metrics
-
-
-#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-def train_loop(epoch, model, loader, optimizer, n_classes, writer = None, loss_fn = None):   
-    device=torch.device("cuda" if torch.cuda.is_available() else "cpu") 
-    model.train()
-    acc_logger = Accuracy_Logger(n_classes=n_classes)
-    train_loss = 0.
-    train_error = 0.
-
-    print('\n')
-    for batch_idx, (data, label, metadata) in enumerate(loader):
-        data, label, metadata= data.to(device), label.to(device), metadata.to(device)
-        distances, Y_prob, Y_hat, _, _ = model.clam(data)
-        
-        acc_logger.log(Y_hat, label)
-        loss = loss_fn(distances, label)
-        loss_value = loss.item()
-        
-        train_loss += loss_value
-        if (batch_idx + 1) % 20 == 0:
-            print('batch {}, loss: {:.4f}, label: {}, bag_size: {}'.format(batch_idx, loss_value, label.item(), data.size(0)))
-           
-        #error = calculate_error(Y_hat, label)
-        train_error += error
-        
-        # backward pass
-        loss.backward()
-        # step
-        optimizer.step()
-        optimizer.zero_grad()
-
-    # calculate loss and error for epoch
-    train_loss /= len(loader)
-    train_error /= len(loader)
-
-    print('Epoch: {}, train_loss: {:.4f}, train_error: {:.4f}'.format(epoch, train_loss, train_error))
-    for i in range(n_classes):
-        acc, correct, count = acc_logger.get_summary(i)
-        print('class {}: acc {}, correct {}/{}'.format(i, acc, correct, count))
-        if writer:
-            writer.add_scalar('train/class_{}_acc'.format(i), acc, epoch)
-
-    wandb.log({
-       'Train loss' : train_loss, 'Train AUC' : acc,
-       'Train error' : train_error
-        }, commit=False)
-
-    if writer:
-        writer.add_scalar('train/loss', train_loss, epoch)
-        writer.add_scalar('train/error', train_error, epoch)
-
-   
-def validate(cur, epoch, model, loader, n_classes, early_stopping = None, writer = None, loss_fn = None, results_dir=None):
-    device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.eval()
-    acc_logger = Accuracy_Logger(n_classes=n_classes)
-    # loader.dataset.update_mode(True)
-    val_loss = 0.
-    val_error = 0.
-    
-    prob = np.zeros((len(loader), n_classes))
-    labels = np.zeros(len(loader))
-
-    Y_hats = np.zeros(len(loader))
-    with torch.no_grad():
-        for batch_idx, (data, label, metadata) in enumerate(loader):
-            data, label, metadata= data.to(device), label.to(device), metadata.to(device)
-
-            distances, Y_prob, Y_hat, _, _ = model(data, metadata=metadata)
-
-            acc_logger.log(Y_hat, label)
-            
-            loss = loss_fn(distances, label)
-
-            prob[batch_idx] = Y_prob.cpu().numpy()
-            labels[batch_idx] = label.item()
-            Y_hats[batch_idx] = Y_hat.cpu().item()
-
-            val_loss += loss.item()
-            #error = calculate_error(Y_hat, label)
-            val_error += error
-            
-
-    val_error /= len(loader)
-    val_loss /= len(loader)
-
-    if n_classes == 2:
-        auc = roc_auc_score(labels, prob[:, 1])
-        ### CHANGE
-        ### We are giving these back to compute for the best model
-        auc = roc_auc_score(labels, prob[:, 1])
-        f1_value = f1_score(labels, Y_hats)
-        bal_acc = balanced_accuracy_score(labels, Y_hats)
-        sensitivity = recall_score(labels, Y_hats)
-        cm = confusion_matrix(labels, Y_hats)
-        specificity = cm[0][0]/(cm[0][0]+cm[0][1]) # TN/(TN+FP)
-        precision   = precision_score(labels, Y_hats)
-        metrics = (f1_value, labels, prob, bal_acc, sensitivity, specificity, auc, precision)
-    else:
-        auc = roc_auc_score(labels, prob, multi_class='ovr')
-    
-    if writer:
-        writer.add_scalar('val/loss', val_loss, epoch)
-        writer.add_scalar('val/auc', auc, epoch)
-        writer.add_scalar('val/error', val_error, epoch)
+        cluster_assignments.extend(torch.argmax(assignments, dim=1).detach().cpu().numpy())
        
-    # WANDB
-    wandb.log({
-       'Val loss' : val_loss, 'Val AUC' : auc,
-       'Val error' : val_error
-        })
+        # Extract survival times and event indicators from label
+        survival_times = label[:, 1].detach().cpu().numpy()  # Second column for survival times
+        event_indicators = label[:, 0].detach().cpu().numpy()  # First column for event indicators
 
-    print('\nVal Set, val_loss: {:.4f}, val_error: {:.4f}, f1: {:.4f}'.format(val_loss, val_error, f1_value))
-    for i in range(n_classes):
-        acc, correct, count = acc_logger.get_summary(i)
-        print('class {}: acc {}, correct {}/{}'.format(i, acc, correct, count))     
+        loader_survival_times.extend(survival_times)
+        loader_event_indicators.extend(event_indicators)
 
-    if early_stopping:
-        assert results_dir
-        early_stopping(epoch, val_loss, model, ckpt_name = os.path.join(results_dir, "s_{}_checkpoint.pt".format(cur)))
-        
-        if early_stopping.early_stop:
-            print("Early stopping")
-            return True
+  
+    test_loss /= len(loader)
+    total_kmeans_loss /= len(loader)
+    total_silhouette_loss /= len(loader)
 
-    return False, metrics, [val_loss, val_error, 0]
+    loader_data = {
+        'clusters': np.array(cluster_assignments),
+        'times': np.array(loader_survival_times),
+        'events': np.array(loader_event_indicators)
+    }
+
+    c_index_results = fit_nelson_aalen_clusters(training_predictions, loader_data)  # Using training_predictions here
+
+    loss_dict = {
+        'total_loss': test_loss,
+        'k_means_loss': total_kmeans_loss,
+        'silhouette_loss': total_silhouette_loss,
+        }
+
+    return loss_dict, prob, labels, Y_hats, c_index_results['c_index_val']
+
+
