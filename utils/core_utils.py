@@ -177,7 +177,7 @@ def train(datasets, cur, args):
     
     print('\nInit Loaders...', end=' ')
     train_loader = get_split_loader(train_split, training=True, testing = args.testing,
-                                        bs=40, weighted = args.weighted_sample)
+                                        bs=2, weighted = args.weighted_sample)
     val_loader = get_split_loader(val_split,  testing = args.testing, bs=40)
     test_loader = get_split_loader(test_split, testing = args.testing, bs=40)
     print('Done!')
@@ -268,7 +268,7 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, loss
 
     print('\n')
     total_batches = len(loader)  # Get the total number of batches
-    for batch_idx, (data, label, metadata) in enumerate(tqdm(loader, desc='Training')):
+    for batch_idx, (data, label, metadata) in enumerate(tqdm(loader, desc=f'Training')):
         label, metadata = label.to(device), metadata.to(device)
 
         distances, assignments, Y_hat, aggregated_features, instance_dict = model(data, label=label, instance_eval=True, metadata=metadata)

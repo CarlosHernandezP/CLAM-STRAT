@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import numpy as np
 
 from models.model_clam import Fusion
+from models.transformers import Transformer as transformer_module
+
 from utils.utils import initialize_weights
 
 def initialize_weights(m):
@@ -26,7 +28,8 @@ class multimodal_cluster(nn.Module):
                  num_clusters: int = 5, temperature: float = 1.0) -> None:
         super(multimodal_cluster, self).__init__()
 
-        self.clam = clam
+        #self.clam = clam
+        self.attention = transformer_module(dim=256, mlp_dim=256)
         self.clam_type= 'sb'
         self.temperature = temperature
         if fus_method=='cat':
@@ -71,10 +74,16 @@ class multimodal_cluster(nn.Module):
 
         for h_single, metadata_single in zip(h, metadata):
             metadata_single = metadata_single.unsqueeze(0)
-            h_single = h_single.to(self.device)
-            
-            M, total_inst_loss, all_targets, all_preds, A_raw = self.clam(h_single, label, instance_eval)
-            M = self.instance_norm_patches(M.unsqueeze(dim=0)).squeeze(dim=0)
+            h_single = h_single.to(self.device)[:9000]
+           
+            #M, total_inst_loss, all_targets, all_preds, A_raw = self.clam(h_single, label, instance_eval)
+            try:
+                M_a = self.attention(h_single.unsqueeze(0))
+            except Exception as e:
+                print(e)
+                import ipdb;ipdb.set_trace()
+
+            M = self.instance_norm_patches(M_a.unsqueeze(dim=0)).squeeze(dim=0)
             
             metadata_single = self.instance_norm_meta(self.metadata_head(metadata_single).unsqueeze(dim=0)).squeeze(dim=0)
             
@@ -84,17 +93,14 @@ class multimodal_cluster(nn.Module):
             Y_hat = torch.topk(-distances, 1, dim=1)[1]
             Y_prob = F.softmax(-distances / self.temperature, dim=1)
             
-            if instance_eval:
-                results_dict = {'instance_loss': total_inst_loss, 'inst_labels': np.array(all_targets), 
-                                'inst_preds': np.array(all_preds)}
-            else:
-                results_dict = {}
+            results_dict = {} # We should delete this
+
             batch_distances.append(distances)
             batch_Y_prob.append(Y_prob)
             batch_Y_hat.append(Y_hat)
             batch_aggregated_info.append(aggregated_info)
             #batch_A_raw.append(A_raw)
-            batch_results_dict.append(results_dict)
+            batch_results_dict.append(results_dict) # We should delete this
 
         # Concatenate all the tensors along the batch dimension
         distances = torch.cat(batch_distances, dim=0)

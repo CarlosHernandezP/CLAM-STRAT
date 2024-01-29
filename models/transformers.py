@@ -38,14 +38,13 @@ class Transformer(BaseAggregator):
     def __init__(
         self,
         *,
-        num_classes,
         input_dim=2048,
         dim=512,
         depth=2,
         heads=8,
         mlp_dim=512,
         pool='cls',
-        dim_head=64,
+        dim_head=32,
         dropout=0.,
         emb_dropout=0.,
         pos_enc=None,
@@ -56,7 +55,6 @@ class Transformer(BaseAggregator):
         }, 'pool type must be either cls (class token) or mean (mean pooling)'
 
         self.projection = nn.Sequential(nn.Linear(input_dim, heads*dim_head, bias=True), nn.ReLU())
-        self.mlp_head = nn.Sequential(nn.LayerNorm(mlp_dim), nn.Linear(mlp_dim, num_classes))
         self.transformer = TransformerBlocks(dim, depth, heads, dim_head, mlp_dim, dropout)
 
         self.pool = pool
@@ -75,18 +73,17 @@ class Transformer(BaseAggregator):
         if self.pos_enc:
             x = x + self.pos_enc(coords)
         
-        import ipdb;ipdb.set_trace()
         if self.pool == 'cls':
             cls_tokens = repeat(self.cls_token, '1 1 d -> b 1 d', b=b)
             x = torch.cat((cls_tokens, x), dim=1)
 
         x = self.dropout(x)
         x = self.transformer(x, register_hook=register_hook)
-        x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
+        x = x[:, 0] # Take the CLS token information
+        
+        return self.norm(x)
 
-        return self.mlp_head(self.norm(x))
 
-
-transformer = Transformer(num_classes=2)
-transformer(torch.rand(1, 1, 2048))
+#transformer = Transformer(num_classes=2)
+#transformer(torch.rand(1, 1, 2048))
 
