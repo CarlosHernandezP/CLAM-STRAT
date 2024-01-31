@@ -61,7 +61,7 @@ class FeedForward(nn.Module):
 class Attention(nn.Module):
     def __init__(self, dim=512, heads=8, dim_head=512 // 8, dropout=0.1):
         super().__init__()
-        inner_dim = dim_head * heads
+        inner_dim = dim_head * heads # Carlos: This inner dimension was being multiplied later
         project_out = not (heads == 1 and dim_head == dim)
 
         self.heads = heads
