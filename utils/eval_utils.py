@@ -10,7 +10,7 @@ import os
 import pandas as pd
 from utils.utils import *
 from utils.core_utils import Accuracy_Logger
-from sklearn.metrics import roc_auc_score, roc_curve, auc
+from sklearn.metrics import roc_auc_score, auc, f1_score, precision_score, recall_score, balanced_accuracy_score, roc_curve
 from sklearn.preprocessing import label_binarize
 import matplotlib.pyplot as plt
 
@@ -116,3 +116,39 @@ def summary(model, loader, args):
         results_dict.update({'p_{}'.format(c): all_probs[:,c]})
     df = pd.DataFrame(results_dict)
     return patient_results, test_error, auc_score, df, acc_logger
+
+
+
+class MetricsLogger:
+    def __init__(self):
+        self.predictions = []
+        self.labels = []
+
+    def update(self, preds, labels):
+        # Assuming preds are logits from a binary classification model
+        # Convert to probabilities for certain metrics
+        probs = torch.softmax(preds, dim=1)[:, 1].detach().cpu().numpy()
+        self.predictions.extend(probs)
+        self.labels.extend(labels.detach().cpu().numpy())
+
+    def compute_metrics(self):
+        preds = np.array(self.predictions)
+        labels = np.array(self.labels)
+
+        # Convert probabilities to binary labels
+        binary_preds = (preds >= 0.5).astype(int)
+
+        metrics = {
+            'roc_auc': roc_auc_score(labels, preds),
+            'f1_score': f1_score(labels, binary_preds),
+            'precision': precision_score(labels, binary_preds),
+            'recall': recall_score(labels, binary_preds),
+            'balanced_accuracy': balanced_accuracy_score(labels, binary_preds)
+        }
+
+        # Clear predictions and labels for next use
+        self.predictions.clear()
+        self.labels.clear()
+
+        return metrics
+

@@ -70,8 +70,6 @@ parser.add_argument('--max_epochs', type=int, default=650,
                     help='maximum number of epochs to train (default: 1800)')
 parser.add_argument('--lr', type=float, default=1e-4,
                     help='learning rate (default: 0.0001)')
-parser.add_argument('--label_frac', type=float, default=1.0,
-                    help='fraction of training labels (default: 1.0)')
 parser.add_argument('--reg', type=float, default=1e-5,
                     help='weight decay (default: 1e-5)')
 parser.add_argument('--seed', type=int, default=1, 
@@ -83,19 +81,18 @@ parser.add_argument('--results_dir', default='./results/strat_pruebas', help='re
 parser.add_argument('--split_dir', type=str, default=None, 
                     help='manually specify the set of splits to use, ' 
                     +'instead of infering from the task and label_frac argument (default: None)')
-parser.add_argument('--log_data', action='store_true', default=False, help='log data using tensorboard')
 parser.add_argument('--testing', action='store_true', default=False, help='debugging tool')
 parser.add_argument('--early_stopping', action='store_true', default=False, help='enable early stopping')
+
 parser.add_argument('--opt', type=str, choices = ['adam', 'sgd'], default='sgd')
 parser.add_argument('--drop_out', action='store_true', default=True, help='enabel dropout (p=0.25)')
-parser.add_argument('--bag_loss', type=str, choices=['svm', 'ce'], default='ce',
-                     help='slide-level classification loss function (default: ce)')
 parser.add_argument('--model_type', type=str, choices=['clam_sb', 'clam_mb', 'mil'], default='clam_sb', 
                     help='type of model (default: clam_sb, clam w/ single attention branch)')
+
 parser.add_argument('--exp_code', type=str, default='Strat_pruebas', help='experiment code for saving results')
 parser.add_argument('--weighted_sample', action='store_true', default=True, help='enable weighted sampling')
-parser.add_argument('--model_size', type=str, choices=['small', 'big'], default='small', help='size of model, does not affect mil')
 parser.add_argument('--task', type=str, choices=['strat', 'xxmm_2023', 'xxmm_slnb'], default ='strat')
+parser.add_argument('--n_classes', type=int, default=2)
 
 # The last two newly added brethrens
 parser.add_argument('--dropout', type=float,  default = 0.2)
@@ -103,18 +100,6 @@ parser.add_argument('--fusion', type=str, default = 'cat')
 parser.add_argument('--hidden_layers', type=int, default = 2)
 parser.add_argument('--final_hidden_layers', type=int, default = 1)
 parser.add_argument('--num_neurons', type=int, default = 32)
-### CLAM specific options
-#TODO
-# change this if we are using images
-parser.add_argument('--no_inst_cluster', action='store_true', default=False,
-                     help='disable instance-level clustering')
-parser.add_argument('--inst_loss', type=str, choices=['svm', 'ce', None], default='ce',
-                     help='instance-level clustering loss function (default: None)')
-parser.add_argument('--subtyping', action='store_true', default=False, 
-                     help='subtyping problem')
-parser.add_argument('--bag_weight', type=float, default=0.90,
-                    help='clam: weight coefficient for bag-level loss (default: 0.9)')
-parser.add_argument('--B', type=int, default=8, help='numbr of positive/negative patches to sample for clam')
 
 args = parser.parse_args()
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -151,11 +136,6 @@ settings = {'num_splits': args.k,
             "use_drop_out": args.drop_out,
             'weighted_sample': args.weighted_sample,
             'opt': args.opt}
-
-if args.model_type in ['clam_sb', 'clam_mb']:
-   settings.update({'bag_weight': args.bag_weight,
-                    'inst_loss': args.inst_loss,
-                    'B': args.B})
 
 print('\nLoad Dataset')
 
