@@ -16,11 +16,6 @@ from datasets.dataset_generic import (Generic_WSI_Classification_Dataset, Generi
 
 # pytorch imports
 import torch
-from torch.utils.data import DataLoader, sampler
-import torch.nn as nn
-import torch.nn.functional as F
-
-import pandas as pd
 import numpy as np
 
 def main(args):

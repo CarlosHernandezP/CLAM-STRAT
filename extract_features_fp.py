@@ -18,7 +18,7 @@ import h5py
 import openslide
 
 
-from utils.dino_utils import load_dinov2
+from utils.dino_utils import load_dinov2, dinov2_finetuned
 
 device = torch.device(
     'cuda') if torch.cuda.is_available() else torch.device('cpu')
@@ -95,14 +95,14 @@ if __name__ == '__main__':
 
     print('loading model checkpoint')
     # CHANGED in order to use the SIMCLR
-  # model = SupConResNet()
-  # print('Loaded new weights!')
-  # model.load_state_dict(torch.load('ResNetModels/simclr.pt')) 
-  # model = model.encoder 
+   #model = SupConResNet()
+   #print('Loaded new weights!')
+   #model.load_state_dict(torch.load('ResNetModels/simclr.pt')) 
+   #model = model.encoder 
 
-    model = resnet50_baseline(pretrained=True)
-    import ipdb;ipdb.set_trace()
-    model = load_dinov2()
+  # model = resnet50_baseline(pretrained=True)
+  # model = load_dinov2()
+    model = dinov2_finetuned()
 
     model = model.to(device)
 

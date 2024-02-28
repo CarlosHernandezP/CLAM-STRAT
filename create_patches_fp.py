@@ -60,10 +60,10 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
     slides = sorted(os.listdir(source))
 
     # Only process slides that we have information about
-    slides = [slide for slide in slides if os.path.isfile(
-        os.path.join(source, slide)) and slide.split('.')[0] in slides]
-    df_with_info = pd.read_csv('/home/carlos.hernandez/datasets/csvs/new_data_2023/histos_good_ids.csv')
-    slides = [slide.split('.')[0] for slide in slides if slide.split('.')[0] in df_with_info.slide_id.values]
+   #slides = [slide for slide in slides if os.path.isfile(
+   #    os.path.join(source, slide)) and slide.split('.')[0] in slides]
+   #df_with_info = pd.read_csv('/home/carlos.hernandez/datasets/csvs/new_data_2023/histos_good_ids.csv')
+   #slides = [slide.split('.')[0] for slide in slides if slide.split('.')[0] in df_with_info.slide_id.values]
 
     if process_list is None:
         df = initialize_df(slides, seg_params, filter_params,
@@ -110,7 +110,7 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 
 
         # Inialize WSI
-        full_path = os.path.join(source, slide) +'.mrxs'
+        full_path = os.path.join(source, slide) #+'.mrxs'
         WSI_object = WholeSlideImage(full_path)
 
         if use_default_params:

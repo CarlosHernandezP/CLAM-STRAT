@@ -21,6 +21,54 @@ def initialize_weights(m):
         nn.init.constant_(m.weight, 1)
         nn.init.constant_(m.bias, 0)
 
+class MIL_transformer(nn.Module):
+    def __init__(self,
+                 num_clusters: int = 5, temperature: float = 1.0) -> None:
+        
+        self.attention = transformer_module(dim=256, mlp_dim=256)
+        self.clam_type= 'sb'
+        self.temperature = temperature
+
+        # Cluster specific
+        self.num_clusters = num_clusters
+        self.clustering_layer = ClusteringLayer(self.num_clusters,
+                            feature_dim=256, temperature =self.temperature)
+        self.norm = nn.BatchNorm1d(256)
+        initialize_weights(self)
+        
+
+    def forward(self, x, return_features=None, attention_only=False):
+        batch_distances, batch_aggregated_info = []
+
+        for x_single in x:
+            x_single = x_single.to(self.device)
+            
+            # Aggregate features
+            try:
+                aggregated_features = self.attention(x_single.unsqueeze(0))
+            except:
+                print(x_single.shape)
+                raise
+            # Compute distances to pseudoclusters
+            distances = self.clustering_layer(self.norm(aggregated_features))
+            
+            # Combine so as to be able to use multiple WSI per batch
+            batch_distances.append(distances)
+            batch_aggregated_info.append(aggregated_features.detach().cpu().numpy())
+
+        distances = torch.cat(batch_distances, dim=0)
+        aggregated_info = torch.cat(batch_aggregated_info, dim=0)
+        
+        if return_features:
+            return aggregated_info
+        if attention_only:
+            raise NotImplementedError
+
+        return distances
+
+        
+
+
 
 class multimodal_cluster(nn.Module):
     def __init__(self, clam, fus_method='cat',
