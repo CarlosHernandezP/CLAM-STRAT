@@ -11,8 +11,9 @@ from utils.file_utils import save_pkl, load_pkl
 from utils.utils import *
 
 from utils.core_utils import train
-from datasets.dataset_generic import (Generic_WSI_Classification_Dataset, Generic_MIL_Dataset,
-                        Clustering_MIL_Dataset)
+from datasets.dataset_generic import (Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, MultiTask_Dataset)
+
+
 
 # pytorch imports
 import torch
@@ -86,13 +87,14 @@ parser.add_argument('--early_stopping', action='store_true', default=False, help
 
 parser.add_argument('--opt', type=str, choices = ['adam', 'sgd'], default='sgd')
 parser.add_argument('--drop_out', action='store_true', default=True, help='enabel dropout (p=0.25)')
-parser.add_argument('--model_type', type=str, choices=['clam_sb', 'clam_mb', 'mil'], default='clam_sb', 
+parser.add_argument('--model_type', type=str, choices=['transformer', 'max_pooling', 'mean_pooling', 'attention'], default='clam_sb', 
                     help='type of model (default: clam_sb, clam w/ single attention branch)')
 
 parser.add_argument('--exp_code', type=str, default='Strat_pruebas', help='experiment code for saving results')
 parser.add_argument('--weighted_sample', action='store_true', default=True, help='enable weighted sampling')
-parser.add_argument('--task', type=str, choices=['strat', 'xxmm_2023', 'xxmm_slnb'], default ='strat')
+parser.add_argument('--task', type=str, choices=['tcga_cvpr', 'strat', 'xxmm_2023', 'xxmm_slnb'], default ='tcga_cvpr')
 parser.add_argument('--n_classes', type=int, default=2)
+parser.add_argument('--use_fga', action='store_true', default=False, help='enable multi task learning for Fraction Genome Altered')
 
 # The last two newly added brethrens
 parser.add_argument('--dropout', type=float,  default = 0.2)
@@ -128,11 +130,8 @@ settings = {'num_splits': args.k,
             'lr': args.lr,
             'experiment': args.exp_code,
             'reg': args.reg,
-            'label_frac': args.label_frac,
-            'bag_loss': args.bag_loss,
             'seed': args.seed,
             'model_type': args.model_type,
-            'model_size': args.model_size,
             "use_drop_out": args.drop_out,
             'weighted_sample': args.weighted_sample,
             'opt': args.opt}
@@ -155,9 +154,9 @@ if args.task == 'xxmm_2023':
 elif args.task == 'strat':
     # Create a Survival MIL Dataset
     args.n_classes=2
-    data_dir = '~/datasets/csvs/new_data_2023/histos_good_ids.csv'
+    csv_dir = '~/datasets/csvs/new_data_2023/histos_good_ids.csv'
 
-    dataset = Clustering_MIL_Dataset(csv_path = data_dir,
+    dataset = Clustering_MIL_Dataset(csv_path = csv_dir,
                             data_dir  = args.data_root_dir,
                             shuffle = False, 
                             seed = args.seed, 
@@ -165,6 +164,20 @@ elif args.task == 'strat':
                             label_dict = {0 :0, 1 :1},
                             patient_strat= False,
                             ignore=[])
+
+elif args.task == 'tcga_cvpr':
+    args.n_classes=2
+    csv_dir = '~/PhD/marato-derma/derma/sol/stratification/histo_csvs/tcga_all_labels.csv'
+
+    dataset = MultiTask_Dataset(csv_path = csv_dir,
+                            data_dir  = args.data_root_dir, shuffle = False, 
+                            seed = args.seed, 
+                            print_info = True,
+                            label_dict = {0 :0, 1 :1},
+                            patient_strat= False,
+                            label_col = 'braf_positivity',
+                            ignore=[])
+
 
 else:
     raise NotImplementedError
@@ -177,7 +190,7 @@ if not os.path.isdir(args.results_dir):
     os.mkdir(args.results_dir)
 
 if args.split_dir is None:
-    args.split_dir = os.path.join('splits', args.task+'_{}'.format(int(args.label_frac*100)))
+    args.split_dir = os.path.join('splits', args.task+'_{}'.format(100))
 else:
     args.split_dir = os.path.join('splits', args.split_dir)
 

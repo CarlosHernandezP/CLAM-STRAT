@@ -9,7 +9,7 @@ from typing import Dict, Union
 
 from utils.utils import *
 from datasets.dataset_generic import save_splits
-from models.custom_mil_models import MIL_transformer
+from models.custom_mil_models import MILTransformer, MILModelMaxPooling, MILModelMeanPooling, MILModelAtt
 from utils.metrics_strat import fit_nelson_aalen_clusters
 from utils.eval_utils import MetricsLogger
 
@@ -58,30 +58,32 @@ class EarlyStopping:
 
 
 def wandb_update(
-    c_index_results: Dict[str, float],
-    test_c_index: float,
-    test_loss: Dict[str, float],
-    train_losses: Dict[str, float],
-    val_losses: Dict[str, float],
-    test_update: bool = False
+    train_metrics : dict,
+    val_metrics : dict,
+    test_metrics : dict = None,
+    scheduler: Union[None, CosineAnnealingWarmRestarts] = None
 ) -> None:
-    log_data: Dict[str, Union[float, Dict[str, float]]] = {
-        'Val C index': c_index_results['c_index_val'],
-        'Train C index': c_index_results['c_index_train'],
-        'Train total loss': train_losses['total_loss'],
-        'Train k_means loss': train_losses['k_means_loss'],
-        'Train silhouette loss': train_losses['silhouette_loss'],
-        'Val total loss': val_losses['total_loss'],
-        'Val k_means loss': val_losses['k_means_loss'],
-        'Val silhouette loss': val_losses['silhouette_loss']
-    }
 
-    if test_update:
+    log_data = {
+        'Train roc_auc': train_metrics['roc_auc'],
+        'Train f1_score': train_metrics['f1_score'],
+        'Train precision': train_metrics['precision'],
+        'Train recall': train_metrics['recall'],
+        'Train balanced_accuracy': train_metrics['balanced_accuracy'],
+        'Val roc_auc': val_metrics['roc_auc'],
+        'Val f1_score': val_metrics['f1_score'],
+        'Val precision': val_metrics['precision'],
+        'Val recall': val_metrics['recall'],
+        'Val balanced_accuracy': val_metrics['balanced_accuracy'],
+        'Learning rate': scheduler.get_last_lr()[0] if scheduler else None
+    }
+    if test_metrics:
         log_data.update({
-            'Test total loss': test_loss['total_loss'],
-            'Test k_means_loss': test_loss['k_means_loss'],
-            'Test silhouette loss': test_loss['silhouette_loss'],
-            'Test C index': test_c_index
+            'Test roc_auc': test_metrics['roc_auc'],
+            'Test f1_score': test_metrics['f1_score'],
+            'Test precision': test_metrics['precision'],
+            'Test recall': test_metrics['recall'],
+            'Test balanced_accuracy': test_metrics['balanced_accuracy'],
         })
 
     wandb.log(log_data)
@@ -111,7 +113,20 @@ def train(datasets, fold, args):
 
     # TODO
     # Create model and instantiate here
-    model = MIL_transformer(input_size=384, hidden_size=256, num_classes=args.n_classes)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    if args.model_type == 'transformer':
+        model = MILTransformer(input_size=384, hidden_size=256, num_classes=args.n_classes, device=device)
+    elif args.model_type == 'max_pooling':
+        model = MILModelMaxPooling(input_size=384, hidden_size=256, num_classes=args.n_classes, device=device)
+    elif args.model_type == 'mean_pooling':
+        model = MILModelMeanPooling(input_size=384, hidden_size=256, num_classes=args.n_classes, device=device)
+    elif args.model_type == 'attention':
+        model = MILModelAtt(input_size=384, hidden_size=256, num_classes=args.n_classes, device=device)
+    else:
+        # Can you give a more descriptive error message?
+        raise ValueError('Model type not recognized') 
+
     print('Done!')
     print_network(model)
 
@@ -124,9 +139,9 @@ def train(datasets, fold, args):
     
     print('\nInit Loaders...', end=' ')
     train_loader = get_split_loader(train_split, training=True, testing = args.testing,
-                                        bs=2, weighted = args.weighted_sample)
-    val_loader = get_split_loader(val_split,  testing = args.testing, bs=40)
-    test_loader = get_split_loader(test_split, testing = args.testing, bs=40)
+                                        bs=1, weighted = args.weighted_sample)
+    val_loader = get_split_loader(val_split,  testing = args.testing, bs=1)
+    test_loader = get_split_loader(test_split, testing = args.testing, bs=1)
     print('Done!')
     print('\nSetup EarlyStopping...', end=' ')
     if args.early_stopping:
@@ -137,27 +152,25 @@ def train(datasets, fold, args):
     print('Done!')
      
     max_roc_auc = 0 
-   #wandb.init(project=f'SLNB positivity {feat_type} 2023', entity='catai', reinit=True, config=args)
-    wandb.init(project=f'CVPR BRAF', entity='catai', reinit=True, config=args)
-    model.to('cuda')
+    wandb.init(name = f'{args.model_type} - fga {args.use_fga}' , project=f'CVPR BRAF', entity='upc_gpi', reinit=True, config=args)
+
+    model.to(device)
     for epoch in range(args.max_epochs):
-        train_metrics = train_epoch(epoch, model, train_loader, optimizer, loss_fn)
-        val_metrics   = validation_epoch(fold, epoch, model, val_loader, loss_fn)
+        train_metrics = train_epoch(epoch, model, train_loader, optimizer, loss_fn, device = device)
+        val_metrics   = validation_epoch(fold, epoch, model, val_loader, loss_fn, device = device)
 
 
         if max_roc_auc<=val_metrics['roc_auc']:
             max_roc_auc = val_metrics['roc_auc']
-            torch.save(model.state_dict(), os.path.join(args.results_dir, "{}/s_{}_{}_checkpoint.pt".format(fold, round(val_metrics['roc_auc'],3), fold)))
+            #torch.save(model.state_dict(), os.path.join(args.results_dir, "{}/s_{}_{}_checkpoint.pt".format(fold, round(val_metrics['roc_auc'],3), fold)))
 
-            test_metrics = summary(model, test_loader)
-            wandb_update(train_metrics, val_metrics, test_metrics)
+            test_metrics = summary(model, test_loader, device = device)
+            wandb_update(train_metrics, val_metrics, test_metrics, scheduler)
         else:
             # Log separately if needed
-            # I want to pot c index and the losses for train and validation
-            wandb_update(c_index_results, test_c_index=None, test_loss=None,
-                           train_losses=train_losses, val_losses=val_losses)
-       #if stop: 
-       #    break
+            wandb_update(train_metrics, val_metrics, test_metrics=None, scheduler=scheduler)
+
+    # Update the learning rate scheduler
     scheduler.step()
         
    #if args.early_stopping:
@@ -176,18 +189,16 @@ def train(datasets, fold, args):
     return 0,0,0,0,0#results_dict, test_auc, val_auc, 1-test_error, 1-val_error 
 
 
-def train_epoch(epoch, model, loader, optimizer, loss_fn = None):
+def train_epoch(epoch, model, loader, optimizer, loss_fn = None, device = 'cpu') -> Dict[str, float]:
 
     metrics_logger = MetricsLogger()
-    device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.train()
    
-
     train_loss = 0.
 
     print('\n')
     for batch_idx, (data, label) in enumerate(tqdm(loader, desc=f'Training')):
-        label, metadata = label.to(device)
+        label = label.to(device)
 
         predictions = model(data)
         # Compute the loss
@@ -216,9 +227,8 @@ def train_epoch(epoch, model, loader, optimizer, loss_fn = None):
     return metrics
 
 
-def validation_epoch(fold, epoch, model, loader, loss_fn = None):
+def validation_epoch(fold, epoch, model, loader, loss_fn = None, device = 'cpu') -> Dict[str, float]:
     metrics_logger = MetricsLogger()
-    device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.eval()
 
     val_loss = 0.
@@ -248,8 +258,7 @@ def validation_epoch(fold, epoch, model, loader, loss_fn = None):
 
 
 
-def summary(model, loader):
-    device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def summary(model, loader, device = 'cpu') -> Dict[str, float]:
     model.eval()
 
     metrics_logger = MetricsLogger()
@@ -266,14 +275,11 @@ def summary(model, loader):
 
         metrics_logger.update(predictions, label)
 
-  
-
-
     metrics = metrics_logger.compute_metrics()
 
     print('Test epoch')
     print('#'*50)
-    print(f'Metrics for validation:\n{metrics}')
+    print(f'Metrics for test set:\n{metrics}')
 
     return metrics
 

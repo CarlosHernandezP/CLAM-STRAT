@@ -14,50 +14,6 @@ import h5py
 
 from utils.utils import generate_split, nth
 
-
-metadata_columns = ['patient_eye_color',
-       'patient_phototype', 'cutaneous_biopsy_breslow',
-       'cutaneous_biopsy_mitotic_index', 'cutaneous_biopsy_associated_nevus',
-       'cutaneous_biopsy_vascular_invasion', 'cutaneous_biopsy_regression',
-       'cutaneous_biopsy_lymphatic_invasion', 'cutaneous_biopsy_ulceration',
-       'cutaneous_biopsy_neurotropism', 'cutaneous_biopsy_satellitosis',
-       'mc1r', 'Recompte de leucòcits', 'Recompte plaquetes',
-       'Neutròfils absoluts (anal)', 'Limfòcits absoluts (analitzado',
-       'Monòcits absoluts (analitzador', 'Eosinòfils absoluts (analitzad',
-       'Concentració dhemoglobina', 'Basòfils absoluts (analitzador',
-       'Aspartat aminotransferasa (ASA', 'Alanin aminotransferasa (ALAT)',
-       'Gamma glutaril transferasa (GG', 'Bilirrubina total',
-       'Lactat deshidrogenasa (LDH)', 'Glucosa', 'Creatinina plasmàtica',
-       'Colesterol total', 'Triglicèrids', 'Proteïnes totals',
-       'Beta 2 microglobulina', 'Proteïna S100',
-       'Melanoma Inhibitory activity', 'high_abv_frequency', 'height',
-       'weight', 'nevi_count', 'nca', 'nca_count', 'blue_nevi_count',
-       'time_smoking', 'cigars_per_day', 'amount_sun_exposure',
-       'braf_mutation', 'cdkn2a_mutation', 'decision_dx', 'age',
-       'primary_tumour_location_coded_acral',
-       'primary_tumour_location_coded_head and neck',
-       'primary_tumour_location_coded_lower limbs',
-       'primary_tumour_location_coded_upper limbs',
-       'primary_tumour_location_coded_mucosa',
-       'cutaneous_biopsy_predominant_cell_type_fusocellular',
-       'cutaneous_biopsy_predominant_cell_type_pleomorphic',
-       'cutaneous_biopsy_predominant_cell_type_sarcomatoid',
-       'cutaneous_biopsy_predominant_cell_type_small_cell',
-       'cutaneous_biopsy_predominant_cell_type_spindle',
-       'cutaneous_biopsy_histological_subtype_acral_lentiginous',
-       'cutaneous_biopsy_histological_subtype_desmoplastic',
-       'cutaneous_biopsy_histological_subtype_lentiginous_malignant',
-       'cutaneous_biopsy_histological_subtype_mucosal',
-       'cutaneous_biopsy_histological_subtype_nevoid',
-       'cutaneous_biopsy_histological_subtype_nodular',
-       'cutaneous_biopsy_histological_subtype_spitzoid',
-       'patient_hair_color_black', 'patient_hair_color_blond',
-       'patient_hair_color_red'] 
-
-metadata_columns = [
-        'cutaneous_biopsy_breslow',
-        'age', 'cutaneous_biopsy_ulceration']
-
 def save_splits(split_datasets, column_keys, filename, boolean_style=False):
     splits = [split_datasets[i].slide_data['slide_id'] for i in range(len(split_datasets))]
     if not boolean_style:
@@ -357,6 +313,33 @@ class Generic_WSI_Classification_Dataset(Dataset):
         df.to_csv(filename, index = False)
 
 
+class MultiTask_Dataset(Generic_WSI_Classification_Dataset):
+    def __init__(self,
+                 data_dir=False,
+                 use_fga = False,
+                 **kwargs):
+
+        super(MultiTask_Dataset, self).__init__(**kwargs)
+        self.data_dir = data_dir
+        self.use_h5 = False
+        self.use_fga = use_fga
+
+    def load_from_h5(self, toggle):
+        self.use_h5 = toggle
+
+    def __getitem__(self, idx):
+        slide_id = self.slide_data['slide_id'][idx]
+
+        braf_label = self.slide_data['braf_positivity'][idx] 
+        data_dir = self.data_dir
+
+        full_path = os.path.join(data_dir, 'pt_files', '{}.pt'.format(slide_id))
+        features = torch.load(full_path)
+        if self.use_fga:
+            fga_label = self.slide_data['Fraction Genome Altered'][idx]
+            return features, (braf_label, fga_label)
+        else:
+            return features, braf_label
 
 class Clustering_MIL_Dataset(Generic_WSI_Classification_Dataset):
     def __init__(self,
@@ -372,7 +355,6 @@ class Clustering_MIL_Dataset(Generic_WSI_Classification_Dataset):
         self.use_h5 = toggle
 
     def __getitem__(self, idx):
-        import ipdb; ipdb.set_trace()
         slide_id = self.slide_data['slide_id'][idx]
 
         label = (self.slide_data['event'][idx], self.slide_data['duration'][idx])
@@ -395,24 +377,24 @@ class Generic_MIL_Dataset(Generic_WSI_Classification_Dataset):
         super(Generic_MIL_Dataset, self).__init__(**kwargs)
         self.data_dir = data_dir
         self.use_h5 = False
-        self.metadata = True
+        self.use_fga = False
+
     def load_from_h5(self, toggle):
         self.use_h5 = toggle
 
     def __getitem__(self, idx):
-
         slide_id = self.slide_data['slide_id'][idx]
 
-        label = (self.slide_data['event'][idx], self.slide_data['duration'][idx])
+        braf_label = self.slide_data['braf_positivity'][idx] 
         data_dir = self.data_dir
 
         full_path = os.path.join(data_dir, 'pt_files', '{}.pt'.format(slide_id))
         features = torch.load(full_path)
-        if self.metadata:
-            metadata = self.slide_data[metadata_columns].iloc[idx]
-            return features, label, metadata
+        if self.use_fga:
+            fga_label = self.slide_data['Fraction Genome Altered'][idx]
+            return features, (braf_label, fga_label)
         else:
-            return features, label
+            return features, braf_label
 
 
 class Generic_Split(Generic_MIL_Dataset):
@@ -420,6 +402,8 @@ class Generic_Split(Generic_MIL_Dataset):
         self.use_h5 = False
         self.slide_data = slide_data
         self.metadata = True
+        self.use_fga = False
+
         self.data_dir = data_dir
         self.num_classes = num_classes
         self.slide_cls_ids = [[] for i in range(self.num_classes)]

@@ -36,8 +36,7 @@ def collate_MIL(batch):
     # I want to end up with [bs, num_patches, num_features]
     img =  [item[0] for item in batch] # By doing this we have a list of tensors
     label = torch.LongTensor([item[1] for item in batch]) # [1]
-    metadata = torch.FloatTensor([item[2].values for item in batch]) # [1 x Num metadata features]
-    return [img, label, metadata]
+    return [img, label]
 
 def collate_MIL_simple(batch):
     img = torch.cat([item[0] for item in batch], dim = 0) #[Num_patches x Num features]
