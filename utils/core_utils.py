@@ -117,9 +117,9 @@ def train(datasets, fold, args):
     
     if args.model_type == 'transformer':
         model = MILTransformer(input_size=384, hidden_size=256, num_classes=args.n_classes, device=device)
-    elif args.model_type == 'max_pooling':
+    elif args.model_type == 'max':
         model = MILModelMaxPooling(input_size=384, hidden_size=256, num_classes=args.n_classes, device=device)
-    elif args.model_type == 'mean_pooling':
+    elif args.model_type == 'mean':
         model = MILModelMeanPooling(input_size=384, hidden_size=256, num_classes=args.n_classes, device=device)
     elif args.model_type == 'attention':
         model = MILModelAtt(input_size=384, hidden_size=256, num_classes=args.n_classes, device=device)
@@ -134,7 +134,7 @@ def train(datasets, fold, args):
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, weight_decay=args.reg)
 
     scheduler = CosineAnnealingWarmRestarts(
-       optimizer, T_0=50, T_mult=2, eta_min=0.0005)
+       optimizer, T_0=1, T_mult=2, eta_min=0.0005)
     print('Done!')
     
     print('\nInit Loaders...', end=' ')
@@ -144,6 +144,9 @@ def train(datasets, fold, args):
     test_loader = get_split_loader(test_split, testing = args.testing, bs=1)
     print('Done!')
     print('\nSetup EarlyStopping...', end=' ')
+
+    ## TODO
+    ## This is not functional yet
     if args.early_stopping:
         early_stopping = EarlyStopping(patience =60, stop_epoch=80, verbose = True)
     else:
@@ -165,13 +168,13 @@ def train(datasets, fold, args):
             #torch.save(model.state_dict(), os.path.join(args.results_dir, "{}/s_{}_{}_checkpoint.pt".format(fold, round(val_metrics['roc_auc'],3), fold)))
 
             test_metrics = summary(model, test_loader, device = device)
-            wandb_update(train_metrics, val_metrics, test_metrics, scheduler)
+            wandb_update(train_metrics, val_metrics, test_metrics,  scheduler)
         else:
             # Log separately if needed
             wandb_update(train_metrics, val_metrics, test_metrics=None, scheduler=scheduler)
 
-    # Update the learning rate scheduler
-    scheduler.step()
+        # Update the learning rate scheduler
+        scheduler.step()
         
    #if args.early_stopping:
    #    model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(fold))))
@@ -198,7 +201,7 @@ def train_epoch(epoch, model, loader, optimizer, loss_fn = None, device = 'cpu')
 
     print('\n')
     for batch_idx, (data, label) in enumerate(tqdm(loader, desc=f'Training')):
-        label = label.to(device)
+        data, label = data.to(device), label.to(device)
 
         predictions = model(data)
         # Compute the loss
@@ -235,7 +238,7 @@ def validation_epoch(fold, epoch, model, loader, loss_fn = None, device = 'cpu')
 
     with torch.no_grad():
         for batch_idx, (data, label) in enumerate(tqdm(loader, desc='Validation')):
-            label = label.to(device)
+            data, label = data.to(device), label.to(device)
 
             predictions = model(data)
             # Compute the loss
@@ -265,7 +268,7 @@ def summary(model, loader, device = 'cpu') -> Dict[str, float]:
 
 #    test_loss = 0.
     for batch_idx, (data, label) in enumerate(tqdm(loader, desc='Test')):
-        label = label.to(device)
+        data, label = data.to(device), label.to(device)
 
         ## see what this is used for
         #slide_id = slide_ids.iloc[batch_idx]

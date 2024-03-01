@@ -43,23 +43,15 @@ class MILTransformer(nn.Module):
         initialize_weights(self)
         
     def forward(self, patches, attention_only=False):
-        batch_predictions = []
+        try:
+            aggregated_features = self.attention(patches)
+        except:
+            print(patches.shape)
+            raise
 
-        for x_single in patches:
-            x_single = x_single.to(self.device)
-            
-            # Aggregate features
-            try:
-                aggregated_features = self.attention(x_single.unsqueeze(0))
-            except:
-                print(x_single.shape)
-                raise
-
-            # Obtain a prediction from the aggregated features 
-            pred = self.mlp(self.norm(aggregated_features))
-            # Combine so as to be able to use multiple WSI per batch
-            batch_predictions.append(pred)
-        pred = torch.cat(batch_predictions, dim=0)
+        # Obtain a prediction from the aggregated features 
+        pred = self.mlp(self.norm(aggregated_features))
+        # Combine so as to be able to use multiple WSI per batch
         if attention_only:
             raise NotImplementedError
         return pred
@@ -78,16 +70,14 @@ class MILModelAtt(nn.Module):
 
     def forward(self, x):
         # Apply the attention mechanism
-        x = x[0].to(self.device) 
-
         attn_weights, features = self.attn_model(x)
         attn_weights = attn_weights.squeeze()
         
         # Is this the right way to aggregate the features?
-        aggregated_features = torch.sum(features * attn_weights.unsqueeze(-1), dim=0)
+        aggregated_features = torch.sum(features * attn_weights.unsqueeze(-1), dim=1)
         x = torch.relu(self.fc1(aggregated_features))
         x = self.drop(x)
-        x = self.fc2(x).unsqueeze(0)
+        x = self.fc2(x)
         # print("x: ", x.shape)
         return x
 
@@ -102,11 +92,10 @@ class MILModelMeanPooling(nn.Module):
 
     def forward(self, x):
         # Aggregate the features using mean operation
-        x = x[0].to(self.device)
-        aggregated_features = torch.mean(x, dim=0)  # Mean across the batch dimension
+        aggregated_features = torch.mean(x, dim=1)  # Mean across the batch dimension
         x = torch.relu(self.fc1(aggregated_features))
         x = self.drop(x)
-        x = self.fc2(x).unsqueeze(0)
+        x = self.fc2(x)
         return x # self.softmax(x)
     
 class MILModelMaxPooling(nn.Module):
@@ -120,11 +109,10 @@ class MILModelMaxPooling(nn.Module):
 
     def forward(self, x):
         # Aggregate the features using max operation
-        x = x[0].to(self.device)
-        aggregated_features, _ = torch.max(x, dim=0)  # Max across the batch dimension
+        aggregated_features, _ = torch.max(x, dim=1)  # Max across the batch dimension
         
         x = torch.relu(self.fc1(aggregated_features))
         x = self.drop(x)
-        x = self.fc2(x).unsqueeze(0)
+        x = self.fc2(x)
         return x # self.softmax(x)
 

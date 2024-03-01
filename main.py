@@ -85,9 +85,8 @@ parser.add_argument('--split_dir', type=str, default=None,
 parser.add_argument('--testing', action='store_true', default=False, help='debugging tool')
 parser.add_argument('--early_stopping', action='store_true', default=False, help='enable early stopping')
 
-parser.add_argument('--opt', type=str, choices = ['adam', 'sgd'], default='sgd')
 parser.add_argument('--drop_out', action='store_true', default=True, help='enabel dropout (p=0.25)')
-parser.add_argument('--model_type', type=str, choices=['transformer', 'max_pooling', 'mean_pooling', 'attention'], default='clam_sb', 
+parser.add_argument('--model_type', type=str, choices=['transformer', 'max', 'mean', 'attention'], default='clam_sb', 
                     help='type of model (default: clam_sb, clam w/ single attention branch)')
 
 parser.add_argument('--exp_code', type=str, default='Strat_pruebas', help='experiment code for saving results')
@@ -134,7 +133,7 @@ settings = {'num_splits': args.k,
             'model_type': args.model_type,
             "use_drop_out": args.drop_out,
             'weighted_sample': args.weighted_sample,
-            'opt': args.opt}
+            }
 
 print('\nLoad Dataset')
 

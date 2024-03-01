@@ -52,7 +52,7 @@ def collate_features(batch):
 
 def get_simple_loader(dataset, batch_size=1, num_workers=1):
     kwargs = {'num_workers': 0, 'pin_memory': False, 'num_workers': 0} if device.type == "cuda" else {}
-    loader = DataLoader(dataset, batch_size=batch_size, sampler = sampler.SequentialSampler(dataset), collate_fn = collate_MIL_simple, **kwargs)
+    loader = DataLoader(dataset, batch_size=batch_size, sampler = sampler.SequentialSampler(dataset), **kwargs) #  collate_fn = collate_MIL_simple,
     return loader 
 
 def get_split_loader(split_dataset, training = False, testing = False, weighted = False, bs = 1):
@@ -64,15 +64,15 @@ def get_split_loader(split_dataset, training = False, testing = False, weighted 
         if training:
             if weighted:
                 weights = make_weights_for_balanced_classes_split(split_dataset)
-                loader = DataLoader(split_dataset, batch_size=bs, sampler = WeightedRandomSampler(weights, len(weights)), collate_fn = collate_MIL, **kwargs)	
+                loader = DataLoader(split_dataset, batch_size=bs, sampler = WeightedRandomSampler(weights, len(weights)),  **kwargs)  #collate_fn = collate_MIL,
             else:
-                loader = DataLoader(split_dataset, batch_size=bs, sampler = RandomSampler(split_dataset), collate_fn = collate_MIL, **kwargs)
+                loader = DataLoader(split_dataset, batch_size=bs, sampler = RandomSampler(split_dataset),  **kwargs) # collate_fn = collate_MIL,
         else:
-            loader = DataLoader(split_dataset, batch_size=bs, sampler = SequentialSampler(split_dataset), collate_fn = collate_MIL, **kwargs)
+            loader = DataLoader(split_dataset, batch_size=bs, sampler = SequentialSampler(split_dataset),  **kwargs) # collate_fn = collate_MIL,
 
     else:
         ids = np.random.choice(np.arange(len(split_dataset), int(len(split_dataset)*0.1)), replace = False)
-        loader = DataLoader(split_dataset, batch_size=1, sampler = SubsetSequentialSampler(ids), collate_fn = collate_MIL, **kwargs )
+        loader = DataLoader(split_dataset, batch_size=1, sampler = SubsetSequentialSampler(ids),  **kwargs ) #collate_fn = collate_MIL,
 
     return loader
 
