@@ -22,40 +22,50 @@ def initialize_weights(m):
         nn.init.constant_(m.bias, 0)
 
 class MILTransformer(nn.Module):
-    def __init__(self, input_size=384,
-                        hidden_size=256, num_classes=2, device= 'cpu') -> None:
-        super(MILTransformer, self).__init__()   
-        # To aggregate features
+    def __init__(self, input_size=384, hidden_size=256, num_classes=2, device='cpu', multitask=False):
+        super(MILTransformer, self).__init__()
+        self.multitask = multitask
         heads = 5
-        dim = 32* heads
+        dim = 32 * heads
         mlp_dim = dim
         self.attention = transformer_module(input_dim=input_size, dim=dim, mlp_dim=mlp_dim, heads=heads)
         self.device = device
-        # Create a sequential with these layers and relus in between
-        self.mlp = nn.Sequential(
+        self.norm = nn.LayerNorm(dim)
+
+        # Classification head
+        self.classification_head = nn.Sequential(
             nn.Linear(dim, hidden_size // 2),
             nn.ReLU(),
             nn.Dropout(0.4),
             nn.Linear(hidden_size // 2, num_classes)
         )
-        self.norm = nn.LayerNorm(dim)
+        # Regression head for multitasking
+        if self.multitask:
+            self.regression_head = nn.Sequential(
+                nn.Linear(dim, hidden_size // 2),
+                nn.ReLU(),
+                nn.Dropout(0.4),
+                nn.Linear(hidden_size // 2, 1),
+                nn.Softmax(dim=1)
+            )
         # Initialize weights
         initialize_weights(self)
-        
-    def forward(self, patches, attention_only=False):
+
+    def forward(self, patches):
         try:
             aggregated_features = self.attention(patches)
-        except:
+        except Exception as e:
             print(patches.shape)
-            raise
+            raise e
+        aggregated_features = self.norm(aggregated_features)
+        # Classification prediction
+        classification_pred = self.classification_head(aggregated_features)
+        if self.multitask:
+            # Regression prediction for multitask
+            regression_pred = self.regression_head(aggregated_features)
+            return classification_pred, regression_pred
 
-        # Obtain a prediction from the aggregated features 
-        pred = self.mlp(self.norm(aggregated_features))
-        # Combine so as to be able to use multiple WSI per batch
-        if attention_only:
-            raise NotImplementedError
-        return pred
-
+        return classification_pred
 
 
 class MILModelAtt(nn.Module):

@@ -107,16 +107,20 @@ def train(datasets, fold, args):
     # TODO
     # Change to Binary Cross Entropy
     # Add MSE or smth if we add the FGA label
-    loss_fn = nn.CrossEntropyLoss()
+    loss_fn = []
+    loss_fn.append(nn.CrossEntropyLoss())
+    if args.use_fga:
+       if args.model_type != 'transformer':
+            raise ValueError('FGA label is only supported for the transformer model')
+       loss_fn.append(nn.MSELoss())
+
     print('Done!')
     print('\nInit Model...', end=' ')
 
-    # TODO
-    # Create model and instantiate here
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = 'cpu' # 'cuda' if torch.cuda.is_available() else 'cpu'
     
     if args.model_type == 'transformer':
-        model = MILTransformer(input_size=384, hidden_size=256, num_classes=args.n_classes, device=device)
+        model = MILTransformer(input_size=384, hidden_size=256, num_classes=args.n_classes, device=device, multitask=args.use_fga)
     elif args.model_type == 'max':
         model = MILModelMaxPooling(input_size=384, hidden_size=256, num_classes=args.n_classes, device=device)
     elif args.model_type == 'mean':
@@ -159,15 +163,15 @@ def train(datasets, fold, args):
 
     model.to(device)
     for epoch in range(args.max_epochs):
-        train_metrics = train_epoch(epoch, model, train_loader, optimizer, loss_fn, device = device)
-        val_metrics   = validation_epoch(fold, epoch, model, val_loader, loss_fn, device = device)
+        train_metrics = train_epoch(epoch, model, train_loader, optimizer, loss_fn, device = device, multitask=args.use_fga)
+        val_metrics   = validation_epoch(epoch, model, val_loader, loss_fn, device = device, multitask=args.use_fga)
 
 
         if max_roc_auc<=val_metrics['roc_auc']:
             max_roc_auc = val_metrics['roc_auc']
             #torch.save(model.state_dict(), os.path.join(args.results_dir, "{}/s_{}_{}_checkpoint.pt".format(fold, round(val_metrics['roc_auc'],3), fold)))
 
-            test_metrics = summary(model, test_loader, device = device)
+            test_metrics = summary(model, test_loader, device = device, multitask=args.use_fga)
             wandb_update(train_metrics, val_metrics, test_metrics,  scheduler)
         else:
             # Log separately if needed
@@ -192,89 +196,130 @@ def train(datasets, fold, args):
     return 0,0,0,0,0#results_dict, test_auc, val_auc, 1-test_error, 1-val_error 
 
 
-def train_epoch(epoch, model, loader, optimizer, loss_fn = None, device = 'cpu') -> Dict[str, float]:
-
+def train_epoch(epoch, model, loader, optimizer, loss_fn, device = 'cpu', multitask=False) -> Dict[str, float]:
     metrics_logger = MetricsLogger()
     model.train()
    
-    train_loss = 0.
+    train_loss_braf = 0.
+    train_loss_fga = 0. if multitask else None
 
-    print('\n')
-    for batch_idx, (data, label) in enumerate(tqdm(loader, desc=f'Training')):
-        data, label = data.to(device), label.to(device)
+    for _, (data, labels) in enumerate(tqdm(loader, desc=f'Training')):
+        data = data.to(device)
+        if multitask:
+            labels = (labels[0].to(device), labels[1].to(device).float()) # The float needs to be added
+        else:
+            labels = labels.to(device)
+
+        # Predict from the model. If not multitask -> predictions is a tensor of shape (bs, n_classes)
+        # If multitask -> predictions is a list of two tensors, one for each task
 
         predictions = model(data)
-        # Compute the loss
-        loss = loss_fn(predictions, label)
-        
-        # Name a more iconic trio
+
+        if multitask:
+            loss_braf = loss_fn[0](predictions[0], labels[0])
+            # Compute the loss for FGA regression || We add the view so it does not throw an error
+            loss_fga = loss_fn[1](predictions[1].view(1), labels[1])
+            loss = loss_braf + loss_fga
+            train_loss_fga += loss_fga.item()
+            train_loss_braf += loss_braf.item()
+
+            predictions, labels = predictions[0], labels[0]
+        else:
+        # Compute the loss for B-RAF classification
+            loss_braf = loss_fn[0](predictions, labels)
+            loss = loss_braf
+            train_loss_braf += loss_braf.item()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
-        # Update logger
-        metrics_logger.update(predictions, label) 
-        
-        train_loss += loss.item()
 
-    # calculate loss and error for epoch
-    train_loss /= len(loader)
-    metrics = metrics_logger.compute_metrics() 
-    # Print kmeans, silhouette and total loss without any inst loss
-    print(f'Training Epoch: {epoch}: train_loss: {train_loss:.4f}')
-    # Print the metrics
-    print('#'*50)
-    print(f'Metrics for training:\n{metrics}')
-    
+        metrics_logger.update(predictions, labels) 
 
+    train_loss_braf /= len(loader)
+    if multitask:
+        train_loss_fga /= len(loader)
+
+    metrics = metrics_logger.compute_metrics()
+
+    # Add the losses to the metrics dictionary
+    metrics['train_loss_braf'] = train_loss_braf
+    if multitask:
+        metrics['train_loss_fga'] = train_loss_fga
+
+    # Print out the metrics
+    print(f'Training Epoch: {epoch}:')
+    for key, value in metrics.items():
+        print(f'{key}: {value:.4f}')
+    print('#' * 50)
     return metrics
 
-
-def validation_epoch(fold, epoch, model, loader, loss_fn = None, device = 'cpu') -> Dict[str, float]:
+def validation_epoch(epoch, model, loader, loss_fn, device='cpu', multitask=False) -> Dict[str, float]:
     metrics_logger = MetricsLogger()
     model.eval()
 
-    val_loss = 0.
+    val_loss_braf = 0.
+    val_loss_fga = 0. if multitask else None
 
     with torch.no_grad():
-        for batch_idx, (data, label) in enumerate(tqdm(loader, desc='Validation')):
-            data, label = data.to(device), label.to(device)
+        for _, (data, labels) in enumerate(tqdm(loader, desc='Validation')):
+            data = data.to(device)
+            if multitask:
+                labels = (labels[0].to(device), labels[1].to(device).float())
+            else:
+                labels = labels.to(device)
 
             predictions = model(data)
-            # Compute the loss
-            loss = loss_fn(predictions, label)
-            # Update logger
-            metrics_logger.update(predictions, label) 
-            
-            val_loss += loss.item()
 
-    val_loss /= len(loader)
+            if multitask:
+                # Compute the loss for B-RAF classification
+                loss_braf = loss_fn[0](predictions[0], labels[0] if multitask else labels) # Maybe we can clean the code if we do this if statements
+                loss_fga = loss_fn[1](predictions[1].view(1), labels[1])
+
+                val_loss_braf += loss_braf.item()
+                val_loss_fga += loss_fga.item()
+                predictions, labels = predictions[0], labels[0]
+            else:
+                loss_braf = loss_fn[0](predictions, labels)
+                val_loss_braf += loss_braf.item()
+
+            metrics_logger.update(predictions, labels)
+
+    val_loss_braf /= len(loader)
+    if multitask:
+        val_loss_fga /= len(loader)
     metrics = metrics_logger.compute_metrics()
+    # Add the losses to the metrics dictionary
+    metrics['val_loss_braf'] = val_loss_braf
+    if multitask:
+        metrics['val_loss_fga'] = val_loss_fga
 
-    print(f'Validation Epoch: {epoch}: val_loss: {val_loss:.4f}')
-    print('#'*50)
-    print(f'Metrics for validation:\n{metrics}')
-
+    # Print out the metrics
+    print(f'Validation Epoch: {epoch}:')
+    for key, value in metrics.items():
+        print(f'{key}: {value:.4f}')
+    print('#' * 50)
     return metrics
 
 
-
-
-
-def summary(model, loader, device = 'cpu') -> Dict[str, float]:
+def summary(model, loader, device = 'cpu', multitask=False) -> Dict[str, float]:
     model.eval()
 
     metrics_logger = MetricsLogger()
 
 #    test_loss = 0.
     for batch_idx, (data, label) in enumerate(tqdm(loader, desc='Test')):
-        data, label = data.to(device), label.to(device)
-
+        data = data.to(device)
+        if multitask:
+            label = (label[0].to(device), label[1].to(device))
+        else:
+            label = label.to(device)
         ## see what this is used for
         #slide_id = slide_ids.iloc[batch_idx]
 
         with torch.no_grad():
             predictions = model(data)
+        if multitask:
+            predictions, label = predictions[0], label[0]
 
         metrics_logger.update(predictions, label)
 

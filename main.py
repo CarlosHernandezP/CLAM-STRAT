@@ -14,6 +14,9 @@ from utils.core_utils import train
 from datasets.dataset_generic import (Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, MultiTask_Dataset)
 
 
+# Make wandb offline
+os.environ['WANDB_MODE'] = 'offline'
+
 
 # pytorch imports
 import torch
@@ -41,7 +44,7 @@ def main(args):
     for i in folds:
         seed_torch(args.seed)
         train_dataset, val_dataset, test_dataset = dataset.return_splits(from_id=False, 
-                csv_path='{}/splits_{}.csv'.format(args.split_dir, i))
+                csv_path='{}/splits_{}.csv'.format(args.split_dir, i), args=args)
         datasets = (train_dataset, val_dataset, test_dataset)
         results, test_auc, val_auc, test_acc, val_acc  = train(datasets, i, args)
 
@@ -175,6 +178,7 @@ elif args.task == 'tcga_cvpr':
                             label_dict = {0 :0, 1 :1},
                             patient_strat= False,
                             label_col = 'braf_positivity',
+                            use_fga = args.use_fga,
                             ignore=[])
 
 
