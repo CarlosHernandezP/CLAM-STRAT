@@ -75,8 +75,13 @@ def wandb_update(
         'Val precision': val_metrics['precision'],
         'Val recall': val_metrics['recall'],
         'Val balanced_accuracy': val_metrics['balanced_accuracy'],
+        'Val_loss_braf': val_metrics['val_loss_braf'],
+        'Val_loss_fga': val_metrics['val_loss_fga'] if 'val_loss_fga' in val_metrics.keys() else None,
+        'Train loss braf': train_metrics['train_loss_braf'],
+        'Train loss fga': train_metrics['train_loss_fga'] if 'train_loss_fga' in train_metrics.keys() else None,
         'Learning rate': scheduler.get_last_lr()[0] if scheduler else None
     }
+
     if test_metrics:
         log_data.update({
             'Test roc_auc': test_metrics['roc_auc'],
@@ -203,7 +208,7 @@ def train_epoch(epoch, model, loader, optimizer, loss_fn, device = 'cpu', multit
     train_loss_braf = 0.
     train_loss_fga = 0. if multitask else None
 
-    for _, (data, labels) in enumerate(tqdm(loader, desc=f'Training')):
+    for batch_idx, (data, labels) in enumerate(tqdm(loader, desc=f'Training')):
         data = data.to(device)
         if multitask:
             labels = (labels[0].to(device), labels[1].to(device).float()) # The float needs to be added
