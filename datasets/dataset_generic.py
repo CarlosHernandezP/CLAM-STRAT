@@ -395,7 +395,11 @@ class Generic_MIL_Dataset(Generic_WSI_Classification_Dataset):
         full_path = os.path.join(data_dir, 'pt_files', '{}.pt'.format(slide_id))
         features = torch.load(full_path)
         if self.use_fga:
-            fga_label = self.slide_data['Fraction Genome Altered'][idx]
+            ## TODO
+            # Make log transformation
+            # import math
+            fga_label = math.log(self.slide_data['Fraction Genome Altered'][idx]+1)
+           #fga_label = self.slide_data['Fraction Genome Altered'][idx]
             return features, (braf_label, fga_label)
         else:
             return features, braf_label

@@ -46,7 +46,7 @@ class MILTransformer(nn.Module):
                 nn.ReLU(),
                 nn.Dropout(0.4),
                 nn.Linear(hidden_size // 2, 1),
-                nn.Softmax(dim=1)
+                # As we have negative and positive values we do not apply a non-linearity
             )
         # Initialize weights
         initialize_weights(self)
