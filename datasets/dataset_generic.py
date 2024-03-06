@@ -190,14 +190,14 @@ class Generic_WSI_Classification_Dataset(Dataset):
         else:
             self.train_ids, self.val_ids, self.test_ids = ids
 
-    def get_split_from_df(self, all_splits, split_key='train', use_fga=False):
+    def get_split_from_df(self, all_splits, split_key='train', use_fga=False, add_noise=False):
         split = all_splits[split_key]
         split = split.dropna().reset_index(drop=True)
 
         if len(split) > 0:
             mask = self.slide_data['slide_id'].isin(split.tolist())
             df_slice = self.slide_data[mask].reset_index(drop=True)
-            split = Generic_Split(df_slice, data_dir=self.data_dir, num_classes=self.num_classes, use_fga=use_fga)
+            split = Generic_Split(df_slice, data_dir=self.data_dir, num_classes=self.num_classes, use_fga=use_fga, add_noise=add_noise)
         else:
             split = None
 
@@ -221,10 +221,11 @@ class Generic_WSI_Classification_Dataset(Dataset):
 
 
     def return_splits(self, from_id=True, csv_path=None, args=None):
+        #### Its not here where we need to give me input arguments to the data loader!
         if from_id:
             if len(self.train_ids) > 0:
                 train_data = self.slide_data.loc[self.train_ids].reset_index(drop=True)
-                train_split = Generic_Split(train_data, data_dir=self.data_dir, num_classes=self.num_classes, use_fga=args.use_fga)
+                train_split = Generic_Split(train_data, data_dir=self.data_dir, num_classes=self.num_classes, use_fga=args.use_fga, add_noise=True)
 
             else:
                 train_split = None
@@ -248,8 +249,8 @@ class Generic_WSI_Classification_Dataset(Dataset):
             assert csv_path 
             all_splits = pd.read_csv(csv_path, dtype=self.slide_data['slide_id'].dtype)  # Without "dtype=self.slide_data['slide_id'].dtype", read_csv() will convert all-number columns to a numerical type. Even if we convert numerical columns back to objects later, we may lose zero-padding in the process; the columns must be correctly read in from the get-go. When we compare the individual train/val/test columns to self.slide_data['slide_id'] in the get_split_from_df() method, we cannot compare objects (strings) to numbers or even to incorrectly zero-padded objects/strings. An example of this breaking is shown in https://github.com/andrew-weisman/clam_analysis/tree/main/datatype_comparison_bug-2021-12-01.
             
-            # Carlos: changed here to use_fga
-            train_split = self.get_split_from_df(all_splits, 'train', use_fga=args.use_fga)
+            # Carlos: changed here to use_fga not on top
+            train_split = self.get_split_from_df(all_splits, 'train', use_fga=args.use_fga, add_noise=True)
             val_split = self.get_split_from_df(all_splits, 'val', use_fga=args.use_fga)
             test_split = self.get_split_from_df(all_splits, 'test', use_fga=args.use_fga)
 
@@ -380,8 +381,8 @@ class Generic_MIL_Dataset(Generic_WSI_Classification_Dataset):
         self.data_dir = data_dir
 
         self.use_h5 = False
-        import ipdb; ipdb.set_trace()
         self.use_fga = kwargs['use_fga']
+        self.add_noise = kwargs['add_noise']
 
     def load_from_h5(self, toggle):
         self.use_h5 = toggle
@@ -394,10 +395,11 @@ class Generic_MIL_Dataset(Generic_WSI_Classification_Dataset):
 
         full_path = os.path.join(data_dir, 'pt_files', '{}.pt'.format(slide_id))
         features = torch.load(full_path)
+        if self.add_noise:
+            noise = torch.randn(features.size()) * 0.1
+            features += noise
         if self.use_fga:
             ## TODO
-            # Make log transformation
-            # import math
             fga_label = math.log(self.slide_data['Fraction Genome Altered'][idx]+1)
            #fga_label = self.slide_data['Fraction Genome Altered'][idx]
             return features, (braf_label, fga_label)
@@ -406,11 +408,13 @@ class Generic_MIL_Dataset(Generic_WSI_Classification_Dataset):
 
 
 class Generic_Split(Generic_MIL_Dataset):
-    def __init__(self, slide_data, data_dir=None, num_classes=2, use_fga=False):
+    def __init__(self, slide_data, data_dir=None, num_classes=2, use_fga=False, add_noise=False):
         self.use_h5 = False
         self.slide_data = slide_data
-        self.metadata = True
+
+        # The two are added by me
         self.use_fga = use_fga
+        self.add_noise = add_noise
 
         self.data_dir = data_dir
         self.num_classes = num_classes
