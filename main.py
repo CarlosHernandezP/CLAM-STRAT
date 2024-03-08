@@ -15,7 +15,7 @@ from datasets.dataset_generic import (Generic_WSI_Classification_Dataset, Generi
 
 
 # Make wandb offline
-os.environ['WANDB_MODE'] = 'offline'
+#os.environ['WANDB_MODE'] = 'offline'
 
 
 # pytorch imports
@@ -46,7 +46,10 @@ def main(args):
         train_dataset, val_dataset, test_dataset = dataset.return_splits(from_id=False, 
                 csv_path='{}/splits_{}.csv'.format(args.split_dir, i), args=args)
         datasets = (train_dataset, val_dataset, test_dataset)
-        results, test_auc, val_auc, test_acc, val_acc  = train(datasets, i, args)
+
+        # TODO Finish this part to properly create results
+        end = train(datasets, i, args)
+        return end
 
         ## CHANGE
 #       all_test_auc.append(test_auc)
@@ -72,7 +75,7 @@ parser.add_argument('--data_root_dir', type=str, default="xxmm_feats_level_0",
                     help='data directory')
 parser.add_argument('--max_epochs', type=int, default=650,
                     help='maximum number of epochs to train (default: 1800)')
-parser.add_argument('--lr', type=float, default=1e-4,
+parser.add_argument('--lr', type=float, default=1e-3,
                     help='learning rate (default: 0.0001)')
 parser.add_argument('--reg', type=float, default=1e-5,
                     help='weight decay (default: 1e-5)')
@@ -81,7 +84,7 @@ parser.add_argument('--seed', type=int, default=1,
 parser.add_argument('--k', type=int, default=10, help='number of folds (default: 10)')
 parser.add_argument('--k_start', type=int, default=-1, help='start fold (default: -1, last fold)')
 parser.add_argument('--k_end', type=int, default=-1, help='end fold (default: -1, first fold)')
-parser.add_argument('--results_dir', default='./results/strat_pruebas', help='results directory (default: ./results)')
+parser.add_argument('--results_dir', default='./results/cvpr_training/', help='results directory (default: ./results)')
 parser.add_argument('--split_dir', type=str, default=None, 
                     help='manually specify the set of splits to use, ' 
                     +'instead of infering from the task and label_frac argument (default: None)')
@@ -92,7 +95,7 @@ parser.add_argument('--drop_out', action='store_true', default=True, help='enabe
 parser.add_argument('--model_type', type=str, choices=['transformer', 'max', 'mean', 'attention'], default='clam_sb', 
                     help='type of model (default: clam_sb, clam w/ single attention branch)')
 
-parser.add_argument('--exp_code', type=str, default='Strat_pruebas', help='experiment code for saving results')
+parser.add_argument('--exp_code', type=str, default='cvpr_pruebas', help='experiment code for saving results')
 parser.add_argument('--weighted_sample', action='store_true', default=True, help='enable weighted sampling')
 parser.add_argument('--task', type=str, choices=['tcga_cvpr', 'strat', 'xxmm_2023', 'xxmm_slnb'], default ='tcga_cvpr')
 parser.add_argument('--n_classes', type=int, default=2)

@@ -14,7 +14,7 @@ from dinov2.train.ssl_meta_arch import SSLMetaArch
 
 def load_dinov2(finetune=True):
     if finetune==True:
-        return torch.load('/home/carlos.hernandez/PhD/dinov2/trained_models/prueba_dino.pth')
+        return torch.load('/home/carlos.hernandez/PhD/dinov2/trained_models/best_dino_model.pth')
     else:
         BACKBONE_SIZE = "small" # in ("small", "base", "large" or "giant")
 

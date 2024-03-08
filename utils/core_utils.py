@@ -122,7 +122,7 @@ def train(datasets, fold, args):
     print('Done!')
     print('\nInit Model...', end=' ')
 
-    device = 'cpu' # 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     if args.model_type == 'transformer':
         model = MILTransformer(input_size=384, hidden_size=256, num_classes=args.n_classes, device=device, multitask=args.use_fga)
@@ -184,7 +184,16 @@ def train(datasets, fold, args):
 
         # Update the learning rate scheduler
         scheduler.step()
+
+        # Early stopping
+        if early_stopping:
+            assert args.results_dir
+            early_stopping(epoch, val_metrics['val_loss_braf'], model, ckpt_name = os.path.join(args.results_dir, f"s_{fold}_{args.model_type}_fga_{args.use_fga}_checkpoint.pt"))
         
+        if early_stopping.early_stop:
+            print("Early stopping")
+            wandb.finish()
+            return True  
    #if args.early_stopping:
    #    model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(fold))))
    #else:
@@ -198,7 +207,7 @@ def train(datasets, fold, args):
 
     # TODO
     # remember to delete this as it stops our sweeps from running properly
-    return 0,0,0,0,0#results_dict, test_auc, val_auc, 1-test_error, 1-val_error 
+    return True# 0,0,0,0,0#results_dict, test_auc, val_auc, 1-test_error, 1-val_error 
 
 
 def train_epoch(epoch, model, loader, optimizer, loss_fn, device = 'cpu', multitask=False) -> Dict[str, float]:
