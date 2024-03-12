@@ -79,7 +79,8 @@ def wandb_update(
         'Val_loss_fga': val_metrics['val_loss_fga'] if 'val_loss_fga' in val_metrics.keys() else None,
         'Train loss braf': train_metrics['train_loss_braf'],
         'Train loss fga': train_metrics['train_loss_fga'] if 'train_loss_fga' in train_metrics.keys() else None,
-        'Learning rate': scheduler.get_last_lr()[0] if scheduler else None
+        'Learning rate': scheduler.optimizer.param_groups[0]['lr']  if scheduler else None
+       #'Learning rate': scheduler.get_last_lr()[0] if scheduler else None
     }
 
     if test_metrics:
@@ -140,10 +141,15 @@ def train(datasets, fold, args):
     print_network(model)
 
     print('\nInit optimizer ...', end=' ')
-    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, weight_decay=args.reg)
+   # optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, weight_decay=args.reg)
 
-    scheduler = CosineAnnealingWarmRestarts(
-       optimizer, T_0=1, T_mult=2, eta_min=0.0005)
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.reg, nesterov=True)
+    #scheduler = CosineAnnealingWarmRestarts(
+    #  optimizer, T_0=1, T_mult=2, eta_min=0.0005)
+
+    # Trying out other scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=10)
+
     print('Done!')
     
     print('\nInit Loaders...', end=' ')
@@ -164,7 +170,7 @@ def train(datasets, fold, args):
     print('Done!')
      
     max_roc_auc = 0 
-    wandb.init(name = f'{args.model_type} - fga {args.use_fga}' , project=f'CVPR BRAF', entity='upc_gpi', reinit=True, config=args)
+    wandb.init(name = f'{args.model_type} - lr {args.lr} - wd {args.reg} - fga {args.use_fga}' , project=f'CVPR BRAF', entity='upc_gpi', reinit=True, config=args)
 
     model.to(device)
     for epoch in range(args.max_epochs):
@@ -183,7 +189,7 @@ def train(datasets, fold, args):
             wandb_update(train_metrics, val_metrics, test_metrics=None, scheduler=scheduler)
 
         # Update the learning rate scheduler
-        scheduler.step()
+        scheduler.step(val_metrics['val_loss_braf'])
 
         # Early stopping
         if early_stopping:
